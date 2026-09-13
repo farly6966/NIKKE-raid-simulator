@@ -671,6 +671,7 @@ export function mountCalculator(root: HTMLElement, deps: CalculatorDependencies)
             <span class="union-status" data-union-run-status></span>
           </div>
           <div class="union-progress" data-union-run-progress hidden><i></i></div>
+          <div class="union-raid-planner" data-union-raid-planner></div>
           <div class="union-grid-box" data-union-grid></div>
           <div class="union-report" data-union-report></div>
         </div>

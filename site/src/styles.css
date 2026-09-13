@@ -1291,6 +1291,38 @@ button.roster-cell.is-taken { opacity: .35; cursor: not-allowed; }
 .union-grid-miss { color: #ffab8f; font-size: 11px; }
 .union-grid-box { overflow-x: auto; }
 
+/* 全聯盟排刀 — 血量盤與解算結果。 */
+.union-raid-planner { margin: 14px 0; }
+.union-plan-card { padding: 14px; border: 1px solid rgba(255,191,60,.42);
+  background: linear-gradient(135deg, rgba(42,31,14,.72), rgba(5,16,27,.86)); }
+.union-plan-card h4 { margin: 0 0 6px; color: var(--amber); font-size: 14px; }
+.union-plan-health { width: 100%; margin: 10px 0; border-collapse: collapse; font-size: 11px; }
+.union-plan-health th, .union-plan-health td { padding: 5px; border: 1px solid rgba(146,176,201,.15); text-align: center; }
+.union-plan-health input { width: 88px; max-width: 100%; padding: 5px; color: var(--ink);
+  background: rgba(3,9,16,.7); border: 1px solid var(--line); text-align: right; }
+.union-plan-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.union-plan-summary { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 8px; margin: 12px 0; }
+.union-plan-kpi { padding: 9px; border: 1px solid rgba(146,176,201,.14); background: rgba(3,9,16,.45); }
+.union-plan-kpi span { display: block; color: var(--muted); font-size: 10px; }
+.union-plan-kpi b { display: block; margin-top: 3px; color: var(--ink); font: 800 14px ui-monospace, monospace; }
+.union-plan-phase { margin-top: 14px; }
+.union-plan-phase h5 { margin: 0 0 6px; color: var(--cyan); }
+.union-plan-bar { margin: 7px 0; padding: 8px; border-left: 3px solid var(--line); background: rgba(3,9,16,.38); }
+.union-plan-bar.is-clear { border-left-color: #66d49b; }
+.union-plan-bar > p { margin: 0 0 5px; font-size: 11px; }
+.union-plan-shot { display: grid; grid-template-columns: 3ch minmax(8em,1fr) minmax(12em,2fr) auto auto;
+  gap: 8px; align-items: center; padding: 3px 0; font-size: 11px; }
+.union-plan-shot code { color: var(--cyan); }
+.union-plan-members { margin-top: 12px; overflow-x: auto; }
+.union-plan-members table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.union-plan-members th, .union-plan-members td { padding: 5px 7px; border: 1px solid rgba(146,176,201,.15); text-align: left; }
+@media (max-width: 720px) {
+  .union-plan-summary { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .union-plan-health { display: block; overflow-x: auto; }
+  .union-plan-shot { grid-template-columns: 3ch minmax(7em,1fr) auto; }
+  .union-plan-shot span:nth-child(3), .union-plan-shot span:nth-child(5) { grid-column: 2 / -1; }
+}
+
 /* 聯盟分頁的視覺排隊器 — 五格 + 角色格柵。格柵樣式沿用 .roster-* 不另外寫。 */
 .union-deck { display: block; padding: 8px 0; border-top: 1px solid rgba(146,176,201,.12); }
 .union-deck:first-child { border-top: 0; }

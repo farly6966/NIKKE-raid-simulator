@@ -23,6 +23,7 @@ import {
 import type { BurstSequence } from './burst-order';
 import { cleanUnionSequence, createUnionBurstEditor, cleanNoBurst, applyUnionBurst } from './union-burst';
 import { bestThreeShots } from './union-planning';
+import { plannerCandidates, type RaidPlannerPlan } from './union-raid-planner';
 import { createBattleAnalysis } from './battle-analysis';
 import { ownedSSR, searchSquads } from './union-search';
 import { DEFAULT_SYNCHRO_LEVEL, SYNCHRO_MAX, SYNCHRO_MEASURED_MAX } from './model';
@@ -926,6 +927,8 @@ export function mountUnionRaid(hosts: UnionHosts, deps: UnionDeps): UnionHandle 
     decks: Array.from({ length: DECK_SLOTS }, () => ({ code: '' } as DeckSlot)),
   }));
   let results: JobResult[] = [];
+  let raidPlan: RaidPlannerPlan | undefined;
+  let raidPlannerWorker: Worker | undefined;
   const planSelections = new Set<JobResult>();
   const draftKey = 'nikke-union-board-v2';
   const legacyKey = 'nikke-union-board-v1';
@@ -966,6 +969,8 @@ export function mountUnionRaid(hosts: UnionHosts, deps: UnionDeps): UnionHandle 
       resultsInvalidated = true;
       if (running) cancelled = true;
       results = [];
+      raidPlan = undefined;
+      raidPlannerWorker?.terminate(); raidPlannerWorker = undefined;
       planSelections.clear();
       renderReport();
       runStatus.textContent = '編成或條件已變更，請重新執行模擬。';
@@ -1398,7 +1403,7 @@ export function mountUnionRaid(hosts: UnionHosts, deps: UnionDeps): UnionHandle 
       if (personal) setMode(false);
 
       if (profiles.length > 0) {
-        results = []; planSelections.clear();
+        results = []; raidPlan = undefined; planSelections.clear();
         if (running) { resultsInvalidated = true; cancelled = true; }
       }
       let usable = 0;
@@ -2338,6 +2343,21 @@ export function mountUnionRaid(hosts: UnionHosts, deps: UnionDeps): UnionHandle 
   const runBar = pick(panel, '[data-union-run-progress]');
   const reportBox = pick(panel, '[data-union-report]');
   const gridBox = pick(panel, '[data-union-grid]');
+  const raidPlannerBox = pick(panel, '[data-union-raid-planner]');
+  const raidHealthKey = 'nikke-union-raid-health-v1';
+  const defaultRaidHealth = [
+    [1000, 1000, 1508, 1000, 1508],
+    [1500, 1500, 2261, 1500, 2261],
+    [2920, 2920, 3490, 2920, 3490],
+  ];
+  let raidHealth = defaultRaidHealth.map(phase => [...phase]);
+  try {
+    const saved: unknown = JSON.parse(localStorage.getItem(raidHealthKey) ?? 'null');
+    if (Array.isArray(saved) && saved.length === 3 && saved.every(phase => Array.isArray(phase)
+      && phase.length === 5 && phase.every(value => typeof value === 'number' && Number.isFinite(value) && value > 0))) {
+      raidHealth = saved.map(phase => [...phase]);
+    }
+  } catch { /* Invalid health settings fall back to the published defaults. */ }
 
   /**
    * 무엇이 모자라 못 도는지 한 줄로.
@@ -2453,7 +2473,7 @@ export function mountUnionRaid(hosts: UnionHosts, deps: UnionDeps): UnionHandle 
         });
       }
       if (!current()) {
-        results = []; planSelections.clear();
+        results = []; raidPlan = undefined; planSelections.clear();
         searchStatus.textContent = '帳號或條件已變更，舊搜尋結果已作廢，請重新搜尋。';
       } else {
         selectBest();
@@ -2481,6 +2501,8 @@ export function mountUnionRaid(hosts: UnionHosts, deps: UnionDeps): UnionHandle 
     runButton.disabled = true;
     runStop.hidden = false;
     results = [];
+    raidPlan = undefined;
+    raidPlannerWorker?.terminate(); raidPlannerWorker = undefined;
     resultsInvalidated = false;
     resultBoard = boardState();
     renderReport();
@@ -2537,6 +2559,161 @@ export function mountUnionRaid(hosts: UnionHosts, deps: UnionDeps): UnionHandle 
 
   runButton.addEventListener('click', () => { void runAll(); });
   runStop.addEventListener('click', () => { cancelled = true; });
+
+  const yi = (value: number): string => `${(value / 100_000_000).toLocaleString('zh-TW', {
+    minimumFractionDigits: 0, maximumFractionDigits: 2,
+  })} 億`;
+
+  const planCsv = (plan: RaidPlannerPlan): string => {
+    const quote = (value: unknown) => `"${String(value ?? '').replaceAll('"', '""')}"`;
+    const rows = [['順序', '成員', '同步器', '階段', 'Boss', '隊伍', '角色', '模擬傷害', '有效傷害', '打完剩餘']];
+    let order = 0;
+    for (const bar of plan.bars) for (const shot of bar.shots) rows.push([
+      String(++order), shot.memberName, String(shot.synchro), shot.phase === 3 ? '無限' : String(shot.phase + 1),
+      shot.bossName, String(shot.deckIndex + 1), shot.squad.map(deps.labelOf).join('／'),
+      String(Math.round(shot.damage)), String(Math.round(shot.effectiveDamage)),
+      shot.remainingAfter === null ? '' : String(Math.round(shot.remainingAfter)),
+    ]);
+    return `\ufeff${rows.map(row => row.map(quote).join(',')).join('\r\n')}`;
+  };
+
+  function renderRaidPlanner(): void {
+    raidPlannerBox.replaceChildren();
+    if (results.length === 0) return;
+    if (running) {
+      raidPlannerBox.append(el('p', 'field-note', '全部模擬完成後即可依三階段血量排出全聯盟出刀順序。'));
+      return;
+    }
+    const card = el('section', 'union-plan-card');
+    card.append(el('h4', undefined, '全聯盟最優出刀'));
+    card.append(el('p', 'field-note', '使用目前所有有效模擬結果；每位成員最多三刀且角色不得重複。擊殺溢傷不跨血條，五王全清才進下一階段，第三階段全清後剩餘刀投入無限五王。血量單位為億。'));
+
+    const health = el('table', 'union-plan-health');
+    const head = el('tr');
+    for (const label of ['階段', ...bosses.map((boss, index) => boss.name.trim() || `Boss ${index + 1}`)]) head.append(el('th', undefined, label));
+    health.append(head);
+    raidHealth.forEach((phase, phaseIndex) => {
+      const row = el('tr'); row.append(el('th', undefined, `第 ${phaseIndex + 1} 階段`));
+      phase.forEach((value, bossIndex) => {
+        const td = el('td'); const input = el('input'); input.type = 'number'; input.min = '0.01'; input.step = '0.01';
+        input.value = String(value); input.ariaLabel = `第 ${phaseIndex + 1} 階段 Boss ${bossIndex + 1} 血量（億）`;
+        input.addEventListener('change', () => {
+          const next = Number(input.value);
+          if (!Number.isFinite(next) || next <= 0) { input.value = String(raidHealth[phaseIndex]![bossIndex]); return; }
+          raidHealth[phaseIndex]![bossIndex] = next; raidPlan = undefined;
+          try { localStorage.setItem(raidHealthKey, JSON.stringify(raidHealth)); } catch { /* Optional preference. */ }
+        });
+        td.append(input); row.append(td);
+      });
+      health.append(row);
+    });
+    card.append(health);
+
+    const actions = el('div', 'union-plan-actions');
+    const solve = el('button', 'roster-import union-run', '計算全聯盟最優出刀'); solve.type = 'button';
+    const stop = el('button', 'roster-import', '停止排刀'); stop.type = 'button'; stop.hidden = true;
+    const status = el('span', 'union-status'); status.setAttribute('aria-live', 'polite');
+    actions.append(solve, stop, status); card.append(actions);
+    stop.addEventListener('click', () => {
+      raidPlannerWorker?.terminate(); raidPlannerWorker = undefined;
+      stop.hidden = true; solve.disabled = false; status.textContent = '已停止排刀。';
+    });
+    solve.addEventListener('click', () => {
+      if (raidPlannerWorker) return;
+      const candidates = plannerCandidates(results);
+      if (!candidates.length) { status.textContent = '沒有成功完成的五人模擬結果。'; return; }
+      solve.disabled = true; stop.hidden = false; status.textContent = '正在載入最佳化解算器…'; raidPlan = undefined;
+      const worker = new Worker(new URL('./union-planner.worker.ts', import.meta.url), { type: 'module' });
+      raidPlannerWorker = worker;
+      worker.addEventListener('message', (event: MessageEvent<{ kind: string; message?: string; plan?: RaidPlannerPlan }>) => {
+        if (worker !== raidPlannerWorker) return;
+        if (event.data.kind === 'progress') { status.textContent = event.data.message ?? ''; return; }
+        worker.terminate(); raidPlannerWorker = undefined;
+        if (event.data.kind === 'done' && event.data.plan) {
+          raidPlan = event.data.plan; renderRaidPlanner();
+        } else {
+          stop.hidden = true; solve.disabled = false; status.textContent = `排刀失敗：${event.data.message ?? '未知錯誤'}`;
+        }
+      });
+      worker.addEventListener('error', (event) => {
+        if (worker !== raidPlannerWorker) return;
+        worker.terminate(); raidPlannerWorker = undefined;
+        stop.hidden = true; solve.disabled = false; status.textContent = `排刀失敗：${event.message}`;
+      });
+      worker.postMessage({ phases: raidHealth.map(phase => phase.map(value => value * 100_000_000)), candidates });
+    });
+
+    if (raidPlan) {
+      const plan = raidPlan;
+      const attempted = new Map(results.map(row => [row.job.member.openid, row.job.member.name]));
+      const available = new Set(plan.members.map(member => member.memberId));
+      const unavailable = [...attempted].filter(([id]) => !available.has(id)).map(([, name]) => name);
+      const short = plan.members.filter(member => member.capacity < 3);
+      const reach = { phase1: '第 1 階段', phase2: '第 2 階段', phase3: '第 3 階段', endless: '無限五王' }[plan.reached];
+      const summary = el('div', 'union-plan-summary');
+      for (const [label, value] of [
+        ['可用成員', `${plan.candidateMembers}/${attempted.size}`],
+        ['有效刀數上限', `${plan.attackCapacity}/96`],
+        ['本方案安排', `${plan.plannedAttacks} 刀`],
+        ['推進位置', reach],
+      ]) {
+        const box = el('div', 'union-plan-kpi'); box.append(el('span', undefined, label), el('b', undefined, value)); summary.append(box);
+      }
+      card.append(summary);
+      card.append(el('p', 'field-note', plan.provenOptimal
+        ? `HiGHS 已證明此候選範圍內為最優解。有限血條有效傷害 ${yi(plan.effectiveFiniteDamage)}${plan.endlessDamage ? `；無限五王 ${yi(plan.endlessDamage)}` : ''}。`
+        : `解算器達到時間限制，以下是目前最佳可行解，尚未證明全域最優。有限血條有效傷害 ${yi(plan.effectiveFiniteDamage)}。`));
+      if (unavailable.length) card.append(el('p', 'union-error', `沒有有效模擬結果，未納入：${unavailable.join('、')}`));
+      if (short.length) card.append(el('p', 'union-error', `有效互斥隊伍不足三刀：${short.map(member => `${member.memberName}（${member.capacity}）`).join('、')}`));
+
+      const maxPhase = plan.reached === 'endless' ? 3 : Number(plan.reached.at(-1)) - 1;
+      for (let phase = 0; phase <= maxPhase; phase++) {
+        const section = el('section', 'union-plan-phase');
+        section.append(el('h5', undefined, phase === 3 ? '無限階段・Boss 5' : `第 ${phase + 1} 階段`));
+        for (const bar of plan.bars.filter(item => item.phase === phase)) {
+          const block = el('div', `union-plan-bar${bar.cleared ? ' is-clear' : ''}`);
+          const bossName = bosses[bar.bossIndex]?.name.trim() || `Boss ${bar.bossIndex + 1}`;
+          block.append(el('p', undefined, phase === 3
+            ? `${bossName}｜${bar.shots.length} 刀｜總傷害 ${yi(bar.rawDamage)}`
+            : `${bossName}｜血量 ${yi(bar.hp!)}｜${bar.shots.length} 刀｜${bar.cleared ? `擊殺，溢傷 ${yi(Math.max(0, bar.rawDamage - bar.hp!))}` : `剩餘 ${yi(bar.remaining!)}`}`));
+          bar.shots.forEach((shot, index) => {
+            const line = el('div', 'union-plan-shot');
+            line.append(el('code', undefined, String(index + 1)), el('b', undefined, shot.memberName),
+              el('span', undefined, `第 ${shot.deckIndex + 1} 隊｜${shot.squad.map(deps.labelOf).join('／')}`),
+              el('span', undefined, yi(shot.damage)),
+              el('span', undefined, shot.remainingAfter === null ? '無限' : `剩 ${yi(shot.remainingAfter)}`));
+            block.append(line);
+          });
+          section.append(block);
+        }
+        card.append(section);
+      }
+
+      const membersBox = el('details', 'union-plan-members');
+      membersBox.append(el('summary', undefined, '依成員查看三刀'));
+      const table = el('table'); const tr = el('tr');
+      for (const label of ['成員', '容量', '第 1 刀', '第 2 刀', '第 3 刀']) tr.append(el('th', undefined, label));
+      table.append(tr);
+      for (const member of plan.members) {
+        const row = el('tr'); row.append(el('th', undefined, member.memberName), el('td', undefined, String(member.capacity)));
+        for (let index = 0; index < 3; index++) {
+          const shot = member.shots[index];
+          row.append(el('td', undefined, shot ? `${shot.phase === 3 ? '無限' : `P${shot.phase + 1}`}・B${shot.bossIndex + 1}・T${shot.deckIndex + 1}（${yi(shot.damage)}）` : '—'));
+        }
+        table.append(row);
+      }
+      membersBox.append(table); card.append(membersBox);
+      const save = el('button', 'roster-import', '下載最優出刀 CSV'); save.type = 'button';
+      save.addEventListener('click', () => {
+        const url = URL.createObjectURL(new Blob([planCsv(plan)], { type: 'text/csv;charset=utf-8' }));
+        const link = document.createElement('a'); link.href = url;
+        link.download = `聯盟戰最優出刀_${new Date().toISOString().slice(0, 10)}.csv`; link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      });
+      card.append(save);
+    }
+    raidPlannerBox.append(card);
+  }
 
   /**
    * 배정표 — 공회가 실제로 보는 모양. 줄이 사람, 칸이 보스다.
@@ -2633,6 +2810,7 @@ export function mountUnionRaid(hosts: UnionHosts, deps: UnionDeps): UnionHandle 
 
   function renderReport(): void {
     renderGrid();
+    renderRaidPlanner();
     renderBossOutcomes();
     reportBox.replaceChildren();
     for (const report of groupResults(results)) {

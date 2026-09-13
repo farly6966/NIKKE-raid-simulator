@@ -919,6 +919,13 @@ describe('calculator UI', () => {
     expect(checked).toHaveLength(1);
     expect(checked[0]!.ariaLabel).toContain('Test 2');
     expect(root.querySelector('[data-union-report] .union-status')!.textContent).toContain('合計 400');
+    const raidPlanner = root.querySelector<HTMLElement>('[data-union-raid-planner]')!;
+    expect(raidPlanner.textContent).toContain('全聯盟最優出刀');
+    const health = raidPlanner.querySelectorAll<HTMLInputElement>('.union-plan-health input');
+    expect(health).toHaveLength(15);
+    expect([health[0]!.value, health[2]!.value, health[10]!.value, health[12]!.value])
+      .toEqual(['1000', '1508', '2920', '3490']);
+    expect([...raidPlanner.querySelectorAll('button')].some(button => button.textContent === '計算全聯盟最優出刀')).toBe(true);
   });
 
   it('keeps three-shot selections as later results arrive and refuses a fourth shot', async () => {
