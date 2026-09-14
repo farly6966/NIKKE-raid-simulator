@@ -551,7 +551,7 @@ export function mountCalculator(root: HTMLElement, deps: CalculatorDependencies)
           <button type="button" class="union-mode" data-union-mode="personal" aria-pressed="false">個人用</button>
         </div>
         <p class="union-lede" data-union-lede-union>用聯盟成員<b>各自的實際規格與同步器等級</b>,跑同一個 Boss・同一套隊伍,比較誰能貢獻多少。只有公開妮姬清單的人才能計算。</p>
-        <p class="union-lede" data-union-lede-personal hidden>只用<b>我自己的規格</b>。不必匯入名單,每個 Boss 掛不同戰鬥條件、最多跑三套隊伍一眼比較 — 沿用計算機裡的同步器・主控台・妮姬養成。<b>同步器可以直接在這張表裡改</b>(有連動 Blablalink 的話會帶入帳號值)。</p>
+        <p class="union-lede" data-union-lede-personal hidden>只用<b>我自己的規格</b>。不必匯入名單,每個 Boss 掛不同戰鬥條件、最多跑六套隊伍一眼比較 — 沿用計算機裡的同步器・主控台・妮姬養成。<b>同步器可以直接在這張表裡改</b>(有連動 Blablalink 的話會帶入帳號值)。</p>
 
         <div class="union-step" data-union-step="1">
           <h3>匯入成員資料</h3>

@@ -5,6 +5,7 @@ import {
   groupResults, humanSeconds,
   DIRECT_SNIPPET, MEMBER_SNIPPET, parseDirectScan, parseMemberList, readBossCode, readDeckCode,
   readUnionCode, remainingSeconds, unionCodeOf, unionShareOf, encodeUnionDraft, decodeUnionDraft,
+  DECK_SLOTS,
 } from './union-raid';
 import type { BossSlot, JobResult, MemberRow } from './union-raid';
 import { encodeBattleCode, encodeShareCode } from './share-code';
@@ -241,10 +242,10 @@ describe('local union board draft', () => {
       cycle: { burstReaction: 0.05, burstRegenTime: 5 } }],
   }));
 
-  it('restores all five bosses, three slots, squad and per-deck cycle', () => {
+  it('restores all five bosses, all deck slots, squad and per-deck cycle', () => {
     const restored = decodeUnionDraft(encodeUnionDraft(draft()), ['리타']);
     expect(restored).toHaveLength(5);
-    expect(restored[0]!.decks).toHaveLength(3);
+    expect(restored[0]!.decks).toHaveLength(DECK_SLOTS);
     expect(restored[0]!.decks[0]!.squad?.[0]).toBe('리타');
     expect(restored[0]!.decks[0]!.cycle).toEqual({ burstReaction: 0.05, burstRegenTime: 5 });
     expect(restored[1]!.enabled).toBe(false);
@@ -364,8 +365,8 @@ describe('유니온 판 코드 (NK4)', () => {
     expect(back[0]!.name).toBe('작열 글러트니');
     expect(back[0]!.enabled).toBe(true);
     expect(back[0]!.battle?.enemyCode).toBe('작열');
-    // 每個王保留三個候選隊伍。
-    expect(back[0]!.decks).toHaveLength(3);
+    // 每個王保留全部候選隊伍格。
+    expect(back[0]!.decks).toHaveLength(DECK_SLOTS);
     expect(back[0]!.decks[0]!.squad?.slice(0, 2)).toEqual(['리타', '라피']);
 
     expect(back[1]!.name).toBe('전격 기차');
@@ -377,7 +378,7 @@ describe('유니온 판 코드 (NK4)', () => {
     const back = readUnionCode(unionCodeOf(board()), NAMES);
     expect(back[2]!.enabled).toBe(false);
     expect(back[2]!.name).toBe('');
-    expect(back[2]!.decks).toHaveLength(3);
+    expect(back[2]!.decks).toHaveLength(DECK_SLOTS);
     expect(back[4]!.enabled).toBe(false);
   });
 
@@ -389,7 +390,7 @@ describe('유니온 판 코드 (NK4)', () => {
     expect(Object.keys(share)).toEqual(['bosses']);
   });
 
-  it('덱 칸은 언제나 셋으로 채워 온다 — 코드에 하나만 들었어도', () => {
+  it('덱 칸은 언제나 DECK_SLOTS만큼 채워 온다 — 코드에 하나만 들었어도', () => {
     // 덱 셋이던 시절의 판 코드가 유니온방에 돌아다닌다. 거절하지 않고 받아 준다.
     const many = unionCodeOf([{
       name: '수냉 니힐', code: encodeBattleCode(battle), enabled: true,
@@ -397,7 +398,7 @@ describe('유니온 판 코드 (NK4)', () => {
         { code: deckCode(['앨리스', '', '', '', '']) }, { code: '' }],
     }]);
     const back = readUnionCode(many, NAMES);
-    expect(back[0]!.decks).toHaveLength(3);
+    expect(back[0]!.decks).toHaveLength(DECK_SLOTS);
     expect(back[0]!.decks[0]!.squad?.[0]).toBe('리타');
     expect(back[0]!.decks[1]!.squad?.[0]).toBe('앨리스');
     expect(back[0]!.decks[2]!.squad).toBeUndefined();

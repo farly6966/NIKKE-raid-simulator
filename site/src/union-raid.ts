@@ -90,7 +90,7 @@ export interface DeckSlot {
   burstSequence?: BurstSequence;
 }
 
-/** 보스마다 처음 나오는 덱 칸 수. 여기서 늘리고 줄일 수 있다. */
+/** Local board draft only: never store imported account data or credentials. */
 export function encodeUnionDraft(bosses: BossSlot[]): string {
   return JSON.stringify(bosses.map(boss => ({
     name: boss.name, code: boss.code, enabled: boss.enabled, bossId: boss.bossId,
@@ -130,18 +130,18 @@ export const BOSS_SLOTS = 5;
 const PLAIN_BATTLE_CODE = 'NK3-e30';
 
 /**
- * 덱 칸 상한.
+ * 유니온 레이드 한 판의 길이(초).
  *
- * 판 수가 **유니온원 × 보스 × 덱**으로 곱해진다 — 32명 × 5보스 × 8덱이면 1,280판이라,
- * 병렬로 돌려도 기기에 따라 십 분을 넘긴다. 「더 다양한 덱을 시험하고 싶다」는 요청
- * (2026-09-06)과 그 곱셈 사이의 타협이다.
+ * **180초다.** 한때 90으로 뒀었는데(`context/union_compare.py`의 기본값을 따라간
+ * 것이었다) 그 값이 틀렸다 — 실제로 뛰는 지휘관이 바로잡아 주었다(2026-09-04).
+ * 길이를 반으로 두면 딜도 대략 반으로 나오므로, 표의 모든 칸이 조용히 절반이 된다.
  */
 export const UNION_DURATION = 180;
 
-/** 덱 칸 수를 받아들일 수 있는 범위로 자른다. */
+/** 유니온 레이드에서 고를 수 있는 보스 속성. 빈 값은 «무속성»이다. */
 export const BOSS_CODES: ElementCode[] = ['', '전격', '수냉', '작열', '풍압', '철갑'];
 
-/** 니케 다섯을 조합 코드 한 줄로. 칸에서 바로 고칠 때 코드도 같이 따라가야 한다. */
+/** 보스 한 마리의 «어떤 놈인가». 코드 없이 이것만 고르면 조건이 선다. */
 export interface BossShape {
   element: ElementCode;
   /** 코어 지름(px). 0이면 코어 없음. */
@@ -200,14 +200,22 @@ export function bossCodeForShape(
   } as BattleSettings, coeff);
 }
 /**
- * 보스 하나에 덱 하나.
+ * 보스 한 자리에 후보 덱 여럿.
  *
- * 유니온 레이드는 하루에 보스마다 한 번씩 친다 — 배정표의 칸도 보스마다 하나다.
- * 예전에는 «대안 셋을 나란히 견주라»고 셋을 뒀는데, 그러면 배정표의 한 칸에 값이
- * 셋이 되어 «이 사람 이 보스에서 얼마?»라는 물음에 답이 흐려진다. 조합을 견주는 일은
- * 계산기 탭의 5덱 모드가 하는 일이다.
+ * 예전엔 3으로 두고 「조합을 견주는 건 계산기 탭 5덱 모드의 일」이라며 늘리지
+ * 않았다 — 배정표 한 칸에 값이 여럿이면 「이 사람 이 보스에서 얼마?」가 흐려진다는
+ * 이유였다. 그런데 그 뒤에 이 fork가 얹은 전 유니온 최적 배정(`union-raid-planner.ts`)
+ * 자체가 이미 「후보를 다 늘어놓고 총합이 제일 좋은 조합을 고른다」는 일이고,
+ * `buildGrid`(아래)도 같은 사람·같은 왕이면 후보 중 가장 높은 값 하나만 남긴다 —
+ * 그래서 배정표가 흐려지는 일은 이미 일어나지 않는다. 6으로 늘려, 같은 왕을 다른
+ * 조합으로도 찔러 볼 여지를 넓힌다. 화면은 앞 3자리만 펼치고 나머지는 접어 둔다
+ * (`renderBosses`).
+ *
+ * **무한정 늘리지는 않는다.** 판 수가 유니온원 × 보스 × 덱으로 곱해진다 — 32명 ×
+ * 5보스 × 6덱이면 960판이라, 병렬로 돌려도 기기에 따라 여러 분이 걸린다. 빈 칸은
+ * 판에 안 실리니 다 채울 필요는 없다 — 찔러 보고 싶은 자리만 채운다.
  */
-export const DECK_SLOTS = 3;
+export const DECK_SLOTS = 6;
 
 /**
  * 명단을 뜨는 한 줄. 유니온 스퀘어에 **로그인한 채로** 콘솔에 붙여넣으면
@@ -2157,6 +2165,8 @@ export function mountUnionRaid(hosts: UnionHosts, deps: UnionDeps): UnionHandle 
       if (boss.error) card.append(el('p', 'union-error', boss.error));
 
       const deckBox = el('div', 'union-decks');
+      const extraDeckBox = el('div', 'union-decks');
+      let extraHasSquad = false;
       boss.decks.forEach((deck, deckIndex) => {
         const row = el('div', 'union-deck');
         row.append(el('p', 'union-deck-label', `第 ${deckIndex + 1} 隊`));
@@ -2287,9 +2297,20 @@ export function mountUnionRaid(hosts: UnionHosts, deps: UnionDeps): UnionHandle 
         row.append(codeFold);
 
         if (deck.error) row.append(el('p', 'union-error', deck.error));
-        deckBox.append(row);
+        if (deckIndex < 3) { deckBox.append(row); return; }
+        if (deck.squad?.some(Boolean)) extraHasSquad = true;
+        extraDeckBox.append(row);
       });
       card.append(deckBox);
+      if (boss.decks.length > 3) {
+        const fold = document.createElement('details');
+        fold.className = 'union-deck-fold';
+        fold.open = extraHasSquad;
+        const summary = document.createElement('summary');
+        summary.textContent = `+ 更多候選隊伍（第 4～${boss.decks.length} 隊）`;
+        fold.append(summary, extraDeckBox);
+        card.append(fold);
+      }
       bossBox.append(card);
     });
     renderBossOutcomes();
