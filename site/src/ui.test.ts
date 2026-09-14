@@ -812,7 +812,10 @@ describe('calculator UI', () => {
     [...root.querySelectorAll<HTMLButtonElement>('.union-deck-tools button')].find(button => button.textContent === '與第 2 隊交換')!.click();
     expect(stored()[0].decks[1].burstSequence[0]['3']).toEqual(['앨리스']);
     root.querySelector<HTMLButtonElement>('[data-union-run]')!.click();
-    await flush();
+    // The run first awaits the worker/client prepare path. A single zero-delay
+    // timer is not a reliable synchronization point on a busy CI runner, so
+    // wait for the observable request this assertion is actually about.
+    await vi.waitFor(() => expect(client.lastRequest).not.toBeNull());
     expect(client.lastRequest?.burstSequence?.[0]).toEqual({ '1': ['리타'], '2': ['크라운', '나가'], '3': ['앨리스'] });
     root.replaceChildren();
     mountCalculator(root, { catalog, settings, version: 'v1', client: new FakeClient(), storage: localStorage });
