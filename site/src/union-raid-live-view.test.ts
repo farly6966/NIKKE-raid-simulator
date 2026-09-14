@@ -62,7 +62,7 @@ function host(): HTMLElement {
   const panel = document.createElement('section');
   panel.innerHTML = `
     <div data-live-import><input data-live-file type="file"><div data-live-drop></div><span data-live-import-status></span></div>
-    <div data-live-board><div data-live-status></div><div data-live-phases></div><div data-live-overview></div><div data-live-bosses></div>
+    <div data-live-board><div data-live-status></div><div data-live-phases></div><div data-live-summary></div><div data-live-recorder></div><div data-live-overview></div><div data-live-bosses></div>
       <button data-live-reimport></button><button data-live-reset></button></div>`;
   document.body.append(panel);
   return panel;
@@ -78,6 +78,37 @@ beforeEach(() => {
 });
 
 describe('live raid confirmed-state rendering', () => {
+  it('restores the recorder immediately without waiting for the optimizer', () => {
+    const panel = host();
+    mountLiveRaid({ panel }, { imageOf: () => undefined, labelOf: name => name });
+
+    expect(panel.querySelector('.live-recorder-card')).not.toBeNull();
+    expect(panel.textContent).toContain('第 1 階段');
+    expect(panel.textContent).toContain('帳面剩餘刀');
+  });
+
+  it('does not jump to the furthest theoretically reachable phase after import', () => {
+    const panel = host();
+    mountLiveRaid({ panel }, { imageOf: () => undefined, labelOf: name => name });
+    FakeWorker.instances[0]!.emit({ kind: 'done', plan: { ...plan(false), reached: 'phase3' } });
+
+    const chips = [...panel.querySelectorAll('.live-phase-chip')];
+    expect(chips[0]!.classList.contains('is-now')).toBe(true);
+    expect(chips[2]!.classList.contains('is-now')).toBe(false);
+    expect(panel.querySelector('.live-recorder-card')).not.toBeNull();
+  });
+
+  it('lets the operator record a shot from the always-visible manual form', () => {
+    const panel = host();
+    mountLiveRaid({ panel }, { imageOf: () => undefined, labelOf: name => name });
+    FakeWorker.instances[0]!.emit({ kind: 'done', plan: plan(false) });
+
+    panel.querySelector<HTMLButtonElement>('.live-recorder-card button')!.click();
+    const fired = JSON.parse(localStorage.getItem('nikke-live-raid-fired-v1')!) as unknown[];
+    expect(fired).toHaveLength(1);
+    expect(FakeWorker.instances).toHaveLength(2);
+  });
+
   it('does not show a boss as cleared before any planned attack is confirmed', () => {
     const panel = host();
     mountLiveRaid({ panel }, { imageOf: () => undefined, labelOf: name => name });
@@ -95,9 +126,9 @@ describe('live raid confirmed-state rendering', () => {
     mountLiveRaid({ panel }, { imageOf: () => undefined, labelOf: name => name });
     FakeWorker.instances[0]!.emit({ kind: 'done', plan: plan(false) });
 
-    panel.querySelector<HTMLButtonElement>('.live-shot-row button')!.click();
+    panel.querySelector<HTMLButtonElement>('.live-shot-row.is-pending button')!.click();
     FakeWorker.instances[1]!.emit({ kind: 'error', message: '沒有可用的完整模擬結果。' });
-    panel.querySelector<HTMLButtonElement>('.live-shot-row button')?.click();
+    panel.querySelector<HTMLButtonElement>('.live-shot-row.is-pending button')?.click();
 
     const fired = JSON.parse(localStorage.getItem('nikke-live-raid-fired-v1')!) as unknown[];
     expect(fired).toHaveLength(1);

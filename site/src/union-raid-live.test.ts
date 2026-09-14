@@ -2,7 +2,8 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import loadHighs, { type Highs } from 'highs';
 import { RAID_DAMAGE_SCALE, type MilpSolution, type RaidPlannerCandidate } from './union-raid-planner';
 import {
-  findCandidate, remainingCandidates, remainingPhases, resolveLive, usedCounts, type FiredShot,
+  actualPhaseIndex, findCandidate, remainingCandidates, remainingPhases, resolveLive, usedCounts,
+  type FiredShot,
 } from './union-raid-live';
 
 const candidate = (id: number, member: number, boss: number, team: number, damage = 60): RaidPlannerCandidate => ({
@@ -67,6 +68,21 @@ describe('remainingPhases', () => {
     const a = candidate(0, 0, 0, 0, 30);
     const out = remainingPhases(base, [shot(a, 3)]);
     expect(out[0]![0]).toBe(50 * RAID_DAMAGE_SCALE);
+  });
+});
+
+describe('actualPhaseIndex', () => {
+  const hp = Array.from({ length: 3 }, () => Array(5).fill(100 * RAID_DAMAGE_SCALE));
+
+  it('匯入後還沒有實際出刀時一定從第一階段開始', () => {
+    expect(actualPhaseIndex(hp, [])).toBe(0);
+  });
+
+  it('只在前一階段五王都被已確認傷害清空後才前進', () => {
+    const phaseOneClears = Array.from({ length: 5 }, (_, boss) =>
+      shot(candidate(boss, boss, boss, 0, 100), 0));
+    expect(actualPhaseIndex(hp, phaseOneClears.slice(0, 4))).toBe(0);
+    expect(actualPhaseIndex(hp, phaseOneClears)).toBe(1);
   });
 });
 

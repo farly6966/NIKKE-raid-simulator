@@ -1,7 +1,10 @@
 import { squadPreview } from './share-panel';
-import type { RaidPlannerInput, RaidPlannerPlan, RaidPlannerShot } from './union-raid-planner';
 import {
-  findCandidate, remainingCandidates, remainingPhases, usedCounts, type FiredShot,
+  memberAttackCapacity, type RaidPlannerCandidate, type RaidPlannerInput, type RaidPlannerPlan,
+  type RaidPlannerShot,
+} from './union-raid-planner';
+import {
+  actualPhaseIndex, findCandidate, remainingCandidates, remainingPhases, usedCounts, type FiredShot,
 } from './union-raid-live';
 
 export interface LiveRaidHosts {
@@ -38,12 +41,6 @@ const pendingKey = (shot: { phase: number; bossIndex: number; memberId: string; 
 
 const PHASE_LABELS = ['第 1 階段', '第 2 階段', '第 3 階段', '無限五王'];
 
-/** `plan.reached`을 화면이 초점 맞출 단계 번호로. 0~2는 유한 단계, 3은 무한 5왕. */
-function currentPhaseIndex(plan: RaidPlannerPlan): number {
-  if (plan.reached === 'endless') return 3;
-  return { phase1: 0, phase2: 1, phase3: 2 }[plan.reached];
-}
-
 /**
  * 「실전 추연(BETA)」 — 미리 낸 시뮬레이션 결과를 불러와, 현장에서 확정되는 대로
  * 남은 문제를 계속 다시 푼다.
@@ -61,6 +58,8 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
   const board = panel.querySelector<HTMLElement>('[data-live-board]')!;
   const status = panel.querySelector<HTMLElement>('[data-live-status]')!;
   const phasesBox = panel.querySelector<HTMLElement>('[data-live-phases]')!;
+  const summaryBox = panel.querySelector<HTMLElement>('[data-live-summary]')!;
+  const recorderBox = panel.querySelector<HTMLElement>('[data-live-recorder]')!;
   const overviewBox = panel.querySelector<HTMLElement>('[data-live-overview]')!;
   const bossesBox = panel.querySelector<HTMLElement>('[data-live-bosses]')!;
   const reimportButton = panel.querySelector<HTMLButtonElement>('[data-live-reimport]')!;
@@ -96,7 +95,9 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
       candidates: remainingCandidates(base.candidates, fired),
       alreadyUsed: usedCounts(fired),
     };
+    plan = undefined;
     status.textContent = '正在重新計算…';
+    renderAll(lastPendingKeys);
     const next = new Worker(new URL('./union-planner.worker.ts', import.meta.url), { type: 'module' });
     worker = next;
     next.addEventListener('message', (event: MessageEvent<{ kind: string; message?: string; plan?: RaidPlannerPlan }>) => {
@@ -123,10 +124,27 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
     next.postMessage(input);
   }
 
+  const bossName = (bossIndex: number): string =>
+    base?.candidates.find((candidate) => candidate.bossIndex === bossIndex)?.bossName || `第 ${bossIndex + 1} 王`;
+
+  const currentPhase = (): number => base ? actualPhaseIndex(base.phases, fired) : 0;
+
+  const capacityOf = (candidates: RaidPlannerCandidate[], subtractUsed: boolean): number => {
+    const groups = new Map<string, RaidPlannerCandidate[]>();
+    for (const candidate of candidates) {
+      const rows = groups.get(candidate.memberId) ?? [];
+      rows.push(candidate); groups.set(candidate.memberId, rows);
+    }
+    const used = usedCounts(fired);
+    return [...groups.entries()].reduce((total, [memberId, rows]) => total + Math.min(
+      memberAttackCapacity(rows), subtractUsed ? Math.max(0, 3 - (used[memberId] ?? 0)) : 3,
+    ), 0);
+  };
+
   function renderPhaseStepper(): void {
     phasesBox.replaceChildren();
-    if (!plan) return;
-    const now = currentPhaseIndex(plan);
+    if (!base) return;
+    const now = currentPhase();
     const row = el('div', 'live-phase-stepper');
     PHASE_LABELS.forEach((label, index) => {
       const state = index < now ? 'done' : index === now ? 'now' : 'todo';
@@ -138,7 +156,177 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
   }
 
   /** 사람마다 확정·대기를 왕별로 합쳐 총람 표를 만든다. */
-  function renderOverview(): void {
+  function renderSummary(): void {
+    summaryBox.replaceChildren();
+    if (!base) return;
+    const now = currentPhase();
+    const totalCapacity = capacityOf(base.candidates, false);
+    const available = remainingCandidates(base.candidates, fired);
+    const remainingCapacity = capacityOf(available, true);
+    const remaining = remainingPhases(base.phases, fired);
+
+    const metrics = el('div', 'live-metrics');
+    const metric = (label: string, value: string): HTMLElement => {
+      const card = el('div', 'live-metric');
+      card.append(el('span', undefined, label), el('b', undefined, value));
+      return card;
+    };
+    metrics.append(
+      metric('目前階段', PHASE_LABELS[now]!),
+      metric('已確認出刀', `${fired.length} / ${totalCapacity}`),
+      metric('帳面剩餘刀', String(Math.max(0, totalCapacity - fired.length))),
+      metric('仍有候選可排', String(remainingCapacity)),
+      metric('重算狀態', plan ? '建議已更新' : '正在計算'),
+    );
+    summaryBox.append(metrics);
+
+    const hpRow = el('div', 'live-hp-row');
+    if (now === 3) {
+      hpRow.append(el('span', 'live-hp-pill', `${bossName(4)} · 無限血量`));
+    } else {
+      remaining[now]!.forEach((hp, index) => {
+        hpRow.append(el('span', `live-hp-pill${hp <= 0 ? ' is-cleared' : ''}`,
+          `${bossName(index)} · ${hp <= 0 ? '已清' : `剩 ${yi(hp)}`}`));
+      });
+    }
+    summaryBox.append(hpRow);
+
+    const recommendation = el('div', 'live-recommendation');
+    recommendation.append(el('b', undefined, '目前各王下一刀建議'));
+    const suggested = plan?.bars.filter((bar) => bar.phase === now && bar.shots.length > 0)
+      .map((bar) => bar.shots[0]!) ?? [];
+    if (!suggested.length) {
+      recommendation.append(el('span', 'field-note', plan
+        ? '目前最佳解沒有分配這一階段；仍可用下方「記錄實際出刀」手動登記。'
+        : '重算完成後會顯示；現在仍可先用下方表單登記。'));
+    } else {
+      const list = el('div', 'live-recommendation-list');
+      for (const shot of suggested) {
+        list.append(el('span', undefined,
+          `${bossName(shot.bossIndex)} → ${shot.memberName} · T${shot.deckIndex + 1} · 預估 ${yi(shot.damage)}`));
+      }
+      recommendation.append(list);
+    }
+    summaryBox.append(recommendation);
+  }
+
+  function recordShot(candidate: RaidPlannerCandidate, phase: number, damageYi: number): boolean {
+    if (!base || !Number.isFinite(damageYi) || damageYi <= 0) {
+      status.textContent = '請選擇實際隊伍並填入大於 0 的傷害。';
+      return false;
+    }
+    const available = remainingCandidates(base.candidates, fired).some((row) =>
+      row.memberId === candidate.memberId && row.bossIndex === candidate.bossIndex
+      && row.deckIndex === candidate.deckIndex);
+    if (!available) {
+      status.textContent = '這個隊伍已出刀或與已用角色重疊，請重新選擇。';
+      renderAll(lastPendingKeys);
+      return false;
+    }
+    fired.push({
+      memberId: candidate.memberId, memberName: candidate.memberName,
+      bossIndex: candidate.bossIndex, bossName: candidate.bossName,
+      phase, deckIndex: candidate.deckIndex, squad: candidate.squad, damage: damageYi * YI,
+    });
+    persist();
+    resolve();
+    return true;
+  }
+
+  function renderRecorder(): void {
+    recorderBox.replaceChildren();
+    if (!base) return;
+    const now = currentPhase();
+    const card = el('section', 'live-recorder-card');
+    const heading = el('div', 'live-recorder-heading');
+    heading.append(el('h3', undefined, '記錄實際出刀'),
+      el('p', 'field-note', '選誰、打哪隻王、實際用了哪隊，再填遊戲結算傷害（單位：億）。確認後立刻扣血、扣刀並重排。'));
+    card.append(heading);
+
+    const controls = el('div', 'live-recorder-controls');
+    const labeled = (label: string, control: HTMLElement): HTMLElement => {
+      const wrap = el('label', 'live-recorder-field');
+      wrap.append(el('span', undefined, label), control);
+      return wrap;
+    };
+    const bossSelect = el('select', 'live-recorder-select');
+    bossSelect.ariaLabel = '實際攻擊 Boss';
+    const currentHp = remainingPhases(base.phases, fired)[now];
+    const bossIndexes = now === 3 ? [4] : Array.from({ length: 5 }, (_, index) => index)
+      .filter((index) => (currentHp?.[index] ?? 0) > 0);
+    for (const index of bossIndexes) {
+      const option = document.createElement('option');
+      option.value = String(index); option.textContent = bossName(index); bossSelect.append(option);
+    }
+    const memberSelect = el('select', 'live-recorder-select');
+    memberSelect.ariaLabel = '實際出刀成員';
+    const deckSelect = el('select', 'live-recorder-select');
+    deckSelect.ariaLabel = '實際使用隊伍';
+    const damageInput = el('input', 'live-damage-input');
+    damageInput.type = 'number'; damageInput.min = '0.01'; damageInput.step = '0.01';
+    damageInput.placeholder = '例如 523.4'; damageInput.ariaLabel = '實際傷害（億）';
+    const preview = el('div', 'live-recorder-preview');
+
+    const candidatesForSelection = (): RaidPlannerCandidate[] => remainingCandidates(base!.candidates, fired)
+      .filter((candidate) => candidate.bossIndex === Number(bossSelect.value)
+        && candidate.memberId === memberSelect.value);
+    const updateDecks = (): void => {
+      deckSelect.replaceChildren(); preview.replaceChildren();
+      const options = candidatesForSelection();
+      for (const candidate of options) {
+        const option = document.createElement('option');
+        option.value = String(candidate.deckIndex);
+        option.textContent = `T${candidate.deckIndex + 1} · 預估 ${yi(candidate.damage)}`;
+        deckSelect.append(option);
+      }
+      const picked = options[0];
+      if (picked) {
+        damageInput.value = (picked.damage / YI).toFixed(2);
+        preview.append(squadPreview([picked.squad], deps.imageOf, deps.labelOf));
+      } else damageInput.value = '';
+    };
+    const updateMembers = (): void => {
+      memberSelect.replaceChildren();
+      const boss = Number(bossSelect.value);
+      const unique = new Map<string, string>();
+      for (const candidate of remainingCandidates(base!.candidates, fired)) {
+        if (candidate.bossIndex === boss) unique.set(candidate.memberId, candidate.memberName);
+      }
+      for (const [id, name] of [...unique.entries()].sort((a, b) => a[1].localeCompare(b[1]))) {
+        const option = document.createElement('option'); option.value = id; option.textContent = name;
+        memberSelect.append(option);
+      }
+      updateDecks();
+    };
+    const updatePreview = (): void => {
+      preview.replaceChildren();
+      const picked = candidatesForSelection().find((candidate) => candidate.deckIndex === Number(deckSelect.value));
+      if (picked) {
+        damageInput.value = (picked.damage / YI).toFixed(2);
+        preview.append(squadPreview([picked.squad], deps.imageOf, deps.labelOf));
+      }
+    };
+    bossSelect.addEventListener('change', updateMembers);
+    memberSelect.addEventListener('change', updateDecks);
+    deckSelect.addEventListener('change', updatePreview);
+    updateMembers();
+
+    const confirm = el('button', 'roster-import union-run', '確認這一刀並重算');
+    confirm.type = 'button';
+    confirm.addEventListener('click', () => {
+      const picked = candidatesForSelection().find((candidate) => candidate.deckIndex === Number(deckSelect.value));
+      if (picked) recordShot(picked, now, Number(damageInput.value));
+      else status.textContent = '這位成員在這隻王沒有可用隊伍。';
+    });
+    controls.append(
+      labeled('Boss', bossSelect), labeled('出刀成員', memberSelect), labeled('實際隊伍', deckSelect),
+      labeled('實際傷害（億）', damageInput), confirm,
+    );
+    card.append(controls, preview);
+    recorderBox.append(card);
+  }
+
+  function renderOverview(now: number): void {
     overviewBox.replaceChildren();
     if (!base) return;
     interface Row { memberId: string; memberName: string; perBoss: Map<number, { done: number; pending: number }>; used: number }
@@ -148,6 +336,7 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
       if (!row) { row = { memberId, memberName, perBoss: new Map(), used: 0 }; rows.set(memberId, row); }
       return row;
     };
+    for (const candidate of base.candidates) ensure(candidate.memberId, candidate.memberName);
     for (const shot of fired) {
       const row = ensure(shot.memberId, shot.memberName);
       row.used += 1;
@@ -156,7 +345,7 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
     }
     if (plan) for (const member of plan.members) {
       const row = ensure(member.memberId, member.memberName);
-      for (const shot of member.shots) {
+      for (const shot of member.shots.filter((candidate) => candidate.phase === now)) {
         const cell = row.perBoss.get(shot.bossIndex) ?? { done: 0, pending: 0 };
         cell.pending += 1; row.perBoss.set(shot.bossIndex, cell);
       }
@@ -195,6 +384,14 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
     row.append(squadPreview([shot.squad], deps.imageOf, deps.labelOf));
     row.append(el('span', 'live-shot-damage', yi(shot.damage)));
     row.append(el('span', 'live-shot-remain', `剩 ${yi(remainingAfter)}`));
+    const undo = el('button', 'roster-import live-undo', '撤銷此刀');
+    undo.type = 'button';
+    undo.addEventListener('click', () => {
+      const index = fired.indexOf(shot);
+      if (index >= 0) fired.splice(index, 1);
+      persist(); resolve();
+    });
+    row.append(undo);
     return row;
   }
 
@@ -240,19 +437,7 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
         status.textContent = '請選擇實際隊伍並填入大於 0 的傷害。';
         return;
       }
-      const alreadyFired = fired.some((row) => row.memberId === shot.memberId
-        && row.bossIndex === shot.bossIndex && row.deckIndex === picked.deckIndex);
-      if (alreadyFired) {
-        status.textContent = '這一發剛剛已經確認過了，畫面正在重新整理。';
-        renderAll(lastPendingKeys);
-        return;
-      }
-      fired.push({
-        memberId: shot.memberId, memberName: shot.memberName, bossIndex: shot.bossIndex, bossName: shot.bossName,
-        phase: shot.phase, deckIndex: picked.deckIndex, squad: picked.squad, damage: damage * YI,
-      });
-      persist();
-      resolve();
+      recordShot(picked, shot.phase, damage);
     });
 
     row.append(preview, deckSelect, damageInput, confirm);
@@ -293,8 +478,10 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
         body.append(renderPendingRow(shot, confirmedHere.length + index + 1, changed));
       });
     }
-    if (!trulyCleared && !confirmedHere.length && !(bar?.shots.length)) {
-      body.append(el('p', 'field-note', '這一階段沒有排這個王的候選。'));
+    if (!trulyCleared && !(bar?.shots.length)) {
+      body.append(el('p', 'field-note', plan
+        ? '目前最佳解沒有分配這隻王；可用上方「記錄實際出刀」手動選人與隊伍。'
+        : '正在重算建議；可先用上方「記錄實際出刀」登記。'));
     }
     wrap.append(body);
     return wrap;
@@ -302,12 +489,13 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
 
   function renderAll(previousKeys: Set<string>): void {
     renderPhaseStepper();
-    renderOverview();
+    renderSummary();
+    renderRecorder();
+    const now = currentPhase();
+    renderOverview(now);
     bossesBox.replaceChildren();
-    if (!plan) return;
-    const now = currentPhaseIndex(plan);
     if (now === 3) {
-      bossesBox.append(el('p', 'field-note', '三階段已全清，剩餘刀全部投入無限五王。下載最優出刀 CSV 可以看完整名單。'));
+      bossesBox.append(el('p', 'field-note', '三階段已全清，現在可從上方登記無限五王的實際出刀；重算建議會持續更新。'));
       return;
     }
     for (let bossIndex = 0; bossIndex < 5; bossIndex++) bossesBox.append(renderBossBlock(now, bossIndex, previousKeys));
@@ -327,6 +515,7 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
       importBox.hidden = true;
       board.hidden = false;
       importStatus.textContent = '';
+      renderAll(lastPendingKeys);
       resolve();
     } catch {
       importStatus.textContent = '無法讀取這個檔案 — 請確認是聯盟戰分頁「匯出試算結果」存的 JSON。';
@@ -354,6 +543,7 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
     lastPendingKeys = new Set();
     plan = undefined;
     persist();
+    renderAll(lastPendingKeys);
     resolve();
   });
 
@@ -361,6 +551,7 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
   if (base) {
     importBox.hidden = true;
     board.hidden = false;
+    renderAll(lastPendingKeys);
     resolve();
   }
 

@@ -702,6 +702,8 @@ export function mountCalculator(root: HTMLElement, deps: CalculatorDependencies)
             <span class="union-status" data-live-status aria-live="polite"></span>
           </div>
           <div class="live-phases" data-live-phases></div>
+          <div class="live-summary" data-live-summary></div>
+          <div class="live-recorder" data-live-recorder></div>
           <div class="live-overview" data-live-overview></div>
           <div class="live-bosses" data-live-bosses></div>
         </div>

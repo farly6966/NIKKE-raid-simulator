@@ -62,6 +62,16 @@ export function remainingPhases(base: number[][], fired: FiredShot[]): number[][
   }));
 }
 
+/**
+ * 現場真正所在的階段只看已確認傷害，不看最佳化「理論上能推到哪裡」。
+ * 0~2 是尚未全清的第一個有限階段；三階段全清後才進無限五王。
+ */
+export function actualPhaseIndex(base: number[][], fired: FiredShot[]): number {
+  const remaining = remainingPhases(base, fired);
+  const phase = remaining.findIndex((bosses) => bosses.some((hp) => hp > 0));
+  return phase === -1 ? 3 : phase;
+}
+
 /** 사람마다 이미 쏜 발 수 — `RaidPlannerInput.alreadyUsed`가 그대로 받는 모양. */
 export function usedCounts(fired: FiredShot[]): Record<string, number> {
   const out: Record<string, number> = {};

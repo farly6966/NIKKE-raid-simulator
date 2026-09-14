@@ -2171,6 +2171,30 @@ body.bm-open { overflow: hidden; }
 .live-phase-chip.is-done { border-color: rgba(69,214,208,.35); color: var(--cyan); background: rgba(69,214,208,.06); }
 .live-phase-chip.is-now { border-color: var(--cyan); color: var(--ink); background: rgba(69,214,208,.14); }
 .live-phase-arrow { color: var(--muted); }
+.live-summary { display: grid; gap: 10px; margin-bottom: 14px; }
+.live-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; }
+.live-metric { display: grid; gap: 4px; padding: 10px 12px; border: 1px solid var(--line);
+  border-radius: 8px; background: rgba(4,12,21,.55); }
+.live-metric span { color: var(--muted); font-size: 10px; }
+.live-metric b { color: var(--ink); font-size: 14px; }
+.live-hp-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.live-hp-pill { padding: 6px 9px; border: 1px solid rgba(255,191,60,.45); border-radius: 999px;
+  color: var(--amber); font: 700 10.5px ui-monospace, monospace; }
+.live-hp-pill.is-cleared { border-color: rgba(69,214,208,.35); color: var(--cyan); }
+.live-recommendation { display: grid; gap: 6px; padding: 10px 12px; border-left: 3px solid var(--cyan);
+  background: rgba(69,214,208,.06); }
+.live-recommendation > b { color: var(--cyan); font-size: 11px; }
+.live-recommendation-list { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 11px; }
+.live-recorder { margin-bottom: 16px; }
+.live-recorder-card { padding: 14px; border: 1px solid rgba(255,191,60,.55); border-radius: 9px;
+  background: linear-gradient(135deg, rgba(255,191,60,.08), rgba(4,12,21,.6)); }
+.live-recorder-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; margin-bottom: 10px; }
+.live-recorder-heading h3, .live-recorder-heading p { margin: 0; }
+.live-recorder-heading h3 { color: var(--amber); font-size: 15px; }
+.live-recorder-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; }
+.live-recorder-field { display: grid; gap: 4px; min-width: 130px; color: var(--muted); font-size: 10px; }
+.live-recorder-select { min-height: 36px; max-width: 220px; }
+.live-recorder-preview { display: flex; margin-top: 10px; min-height: 34px; }
 .live-overview { margin-bottom: 16px; overflow-x: auto; }
 .live-overview-table { width: 100%; border-collapse: collapse; font-size: 11px; }
 .live-overview-table th, .live-overview-table td { padding: 5px 8px; border-bottom: 1px solid var(--line);
@@ -2194,7 +2218,11 @@ body.bm-open { overflow: hidden; }
 .live-deck-select { min-height: 36px; }
 .live-damage-input { width: 90px; min-height: 36px; padding: 4px 6px; border: 1px solid var(--line);
   background: rgba(3,9,16,.6); color: var(--ink); font: 400 11px ui-monospace, monospace; }
+.live-undo { margin-left: auto; padding: 5px 8px; font-size: 10px; }
 @media (max-width: 600px) {
+  .live-metrics { grid-template-columns: repeat(2, minmax(110px, 1fr)); }
+  .live-recorder-field { min-width: calc(50% - 4px); }
   .live-shot-row { flex-direction: column; align-items: flex-start; }
+  .live-undo { margin-left: 0; }
 }
 .bm-layer-move:disabled { opacity: .25; cursor: default; }
