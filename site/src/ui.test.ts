@@ -831,7 +831,10 @@ describe('calculator UI', () => {
     expect(JSON.parse(localStorage.getItem('nikke-union-board-v2')!)[0].decks[0].noBurst).toEqual(['나가']);
     root.querySelector<HTMLInputElement>('[aria-label="每個王搜尋盤數"]')!.value = '10';
     root.querySelector<HTMLButtonElement>('.union-auto-search button')!.click();
-    await vi.waitFor(() => expect(root.querySelector('.union-auto-search .union-status')!.textContent).toContain('本輪搜尋完成'), { timeout: 8000 });
+    // 10판 검색이 다 돌 때까지 기다린다. 예전 8000ms는 기계가 바쁠 때(특히 CI
+    // 공유 러너) 9/10에서 시간이 다 되어 간헐적으로 깨졌다 — 전체 스위트 테스트 시간에
+    // 여유가 있으므로(§vite.config.ts testTimeout 20s) 넉넉히 늘린다.
+    await vi.waitFor(() => expect(root.querySelector('.union-auto-search .union-status')!.textContent).toContain('本輪搜尋完成'), { timeout: 25_000 });
     // 검색이 보낸 것만 센다. 계산기 쪽 «버프 대상 미리 계산»은 이 판과 상관없이
     // 700ms 뒤 한 번 깨어나는데, 검색이 막 끝난 직후에 깨어나면 이 줄 앞에 요청이
     // 하나 더 붙는다 — 기계가 느린 날에만 깨지던 시험의 정체가 그것이었다.
@@ -847,7 +850,7 @@ describe('calculator UI', () => {
     }
     expect(JSON.parse(localStorage.getItem('nikke-roster-v1')!)).toEqual(roster);
     expect([...root.querySelectorAll<HTMLInputElement>('[aria-label^="納入三刀："]')].filter(c => c.checked)).toHaveLength(1);
-  });
+  }, 30_000);
 
   it('미리 계산은 유니온 검색이 도는 동안 워커를 뺏지 않는다', async () => {
     // 버프 대상 «미리 계산»은 편성이 바뀌고 700ms 뒤에 깨어나 요청을 하나 보낸다.
@@ -869,7 +872,7 @@ describe('calculator UI', () => {
     root.querySelector<HTMLButtonElement>('[data-union-mode="personal"]')!.click();
     root.querySelector<HTMLInputElement>('[aria-label="每個王搜尋盤數"]')!.value = '10';
     root.querySelector<HTMLButtonElement>('.union-auto-search button')!.click();
-    await vi.waitFor(() => expect(root.querySelector('.union-auto-search .union-status')!.textContent).toContain('本輪搜尋完成'), { timeout: 20_000 });
+    await vi.waitFor(() => expect(root.querySelector('.union-auto-search .union-status')!.textContent).toContain('本輪搜尋完成'), { timeout: 25_000 });
 
     expect(client.requests).toHaveLength(10);
     // 끼어든 요청은 이 판의 보스 조건(작열)이 아니라 계산기 기본값으로 온다 —
