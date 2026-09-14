@@ -23,7 +23,7 @@ import {
 import type { BurstSequence } from './burst-order';
 import { cleanUnionSequence, createUnionBurstEditor, cleanNoBurst, applyUnionBurst } from './union-burst';
 import { bestThreeShots } from './union-planning';
-import { plannerCandidates, type RaidPlannerPlan } from './union-raid-planner';
+import { plannerCandidates, type RaidPlannerInput, type RaidPlannerPlan } from './union-raid-planner';
 import { createBattleAnalysis } from './battle-analysis';
 import { ownedSSR, searchSquads } from './union-search';
 import { DEFAULT_SYNCHRO_LEVEL, SYNCHRO_MAX, SYNCHRO_MEASURED_MAX } from './model';
@@ -2633,11 +2633,22 @@ export function mountUnionRaid(hosts: UnionHosts, deps: UnionDeps): UnionHandle 
     const actions = el('div', 'union-plan-actions');
     const solve = el('button', 'roster-import union-run', '計算全聯盟最優出刀'); solve.type = 'button';
     const stop = el('button', 'roster-import', '停止排刀'); stop.type = 'button'; stop.hidden = true;
+    const exportResults = el('button', 'roster-import', '匯出試算結果'); exportResults.type = 'button';
+    exportResults.title = '存成 JSON 檔，供「實戰推演」分頁匯入，現場邊打邊重算用。';
     const status = el('span', 'union-status'); status.setAttribute('aria-live', 'polite');
-    actions.append(solve, stop, status); card.append(actions);
+    actions.append(solve, stop, exportResults, status); card.append(actions);
     stop.addEventListener('click', () => {
       raidPlannerWorker?.terminate(); raidPlannerWorker = undefined;
       stop.hidden = true; solve.disabled = false; status.textContent = '已停止排刀。';
+    });
+    exportResults.addEventListener('click', () => {
+      const candidates = plannerCandidates(results);
+      if (!candidates.length) { status.textContent = '沒有成功完成的五人模擬結果。'; return; }
+      const input: RaidPlannerInput = { phases: raidHealth.map(phase => phase.map(value => value * 100_000_000)), candidates };
+      const url = URL.createObjectURL(new Blob([JSON.stringify(input)], { type: 'application/json' }));
+      const link = document.createElement('a'); link.href = url;
+      link.download = `聯盟戰試算結果_${new Date().toISOString().slice(0, 10)}.json`; link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
     });
     solve.addEventListener('click', () => {
       if (raidPlannerWorker) return;

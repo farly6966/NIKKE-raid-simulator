@@ -21,6 +21,8 @@ export interface RaidPlannerCandidate {
 
 export interface RaidPlannerInput extends RaidHealthInput {
   candidates: RaidPlannerCandidate[];
+  /** 이미 확정된 실전 출력만큼 그 사람의 남은 세 발 한도를 줄인다. 없으면 0으로 친다. */
+  alreadyUsed?: Record<string, number>;
 }
 
 export interface RaidPlannerShot extends RaidPlannerCandidate {
@@ -130,8 +132,9 @@ function validate(input: RaidPlannerInput): RaidPlannerCandidate[] {
   if (input.phases.length !== 3 || input.phases.some(phase => phase.length !== 5)) {
     throw new Error('必須提供三階段、每階段五隻 Boss 的血量。');
   }
-  if (input.phases.flat().some(hp => !Number.isFinite(hp) || hp <= 0)) {
-    throw new Error('Boss 血量必須是大於 0 的數字。');
+  // 0은 받는다 — 실전 재계산에서 이미 처치된 왕은 남은 혈량이 0이다(union-raid-live.ts).
+  if (input.phases.flat().some(hp => !Number.isFinite(hp) || hp < 0)) {
+    throw new Error('Boss 血量不能是負數。');
   }
   const candidates = input.candidates.filter(validCandidate);
   if (!candidates.length) throw new Error('沒有可用的完整模擬結果。');
@@ -178,14 +181,14 @@ function buildModel(
   let row = 0;
   for (const [memberId, indices] of byMember) {
     const memberVars = indices.flatMap(index => varsFor(index));
-    lines.push(` member_${row++}: ${sum(memberVars)} <= 3`);
+    const cap = Math.max(0, 3 - (input.alreadyUsed?.[memberId] ?? 0));
+    lines.push(` member_${row++}: ${sum(memberVars)} <= ${cap}`);
     for (const index of indices) lines.push(` candidate_${index}: ${sum(varsFor(index))} <= 1`);
     const characters = [...new Set(indices.flatMap(index => candidates[index]!.squad))];
     for (const character of characters) {
       const conflict = indices.filter(index => candidates[index]!.squad.includes(character)).flatMap(index => varsFor(index));
       lines.push(` character_${row++}: ${sum(conflict)} <= 1`);
     }
-    void memberId;
   }
 
   const requiredFinitePhases = finiteTarget ? targetPhase : 3;
@@ -297,7 +300,7 @@ export function optimizeRaidPlan(
   const allShots = bars.flatMap(bar => bar.shots);
   const members: RaidPlannerMember[] = [...memberGroups.entries()].map(([memberId, rows]) => ({
     memberId, memberName: rows[0]!.memberName, synchro: rows[0]!.synchro,
-    capacity: memberAttackCapacity(rows),
+    capacity: Math.min(memberAttackCapacity(rows), Math.max(0, 3 - (input.alreadyUsed?.[memberId] ?? 0))),
     shots: allShots.filter(shot => shot.memberId === memberId).sort((a, b) => a.phase - b.phase || a.bossIndex - b.bossIndex),
   })).sort((a, b) => a.memberName.localeCompare(b.memberName));
   const finiteBars = bars.filter(bar => bar.phase < 3);
