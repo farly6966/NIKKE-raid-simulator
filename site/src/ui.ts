@@ -57,6 +57,7 @@ import {
   picksFrom, progressOf, sequenceForDeck, sequenceFrom, stepKey, stepsFor, trimSequence,
   type BurstStage, type BurstStep,
 } from './burst-order';
+import { matchingPresets, presetPicks } from './burst-presets';
 import { ShareServer, summarizeBattle, summarizeSquad } from './share-server';
 import { createTimelineBlock } from './timeline';
 
@@ -989,6 +990,7 @@ export function mountCalculator(root: HTMLElement, deps: CalculatorDependencies)
             <button type="button" class="roster-import" data-burst-order-reset>처음부터</button>
           </div>
           <p class="burst-order-hint" data-burst-cycles-note></p>
+          <div class="burst-order-presets" data-burst-presets></div>
           <div class="burst-now" data-burst-now></div>
           <div class="burst-picks" data-burst-picks></div>
           <div class="burst-order-list" data-burst-list></div>
@@ -3269,6 +3271,7 @@ export function mountCalculator(root: HTMLElement, deps: CalculatorDependencies)
   const burstModal = element<HTMLElement>(root, '[data-burst-order-modal]');
   const burstOpenButton = element<HTMLButtonElement>(root, '[data-burst-order-open]');
   const burstBadge = element<HTMLElement>(root, '[data-burst-order-badge]');
+  const burstPresetsBox = element<HTMLElement>(root, '[data-burst-presets]');
   const burstNow = element<HTMLElement>(root, '[data-burst-now]');
   const burstPicksBox = element<HTMLElement>(root, '[data-burst-picks]');
   const burstList = element<HTMLElement>(root, '[data-burst-list]');
@@ -3442,6 +3445,26 @@ export function mountCalculator(root: HTMLElement, deps: CalculatorDependencies)
     renderBurstOrder();
   }
 
+  /** 편성에 맞는 고정 순환 후보를 버튼으로. 누르면 그 단계 picks만 덮어쓴다(다른 단계는 그대로). */
+  function renderBurstPresets(squad: string[]): void {
+    burstPresetsBox.replaceChildren();
+    const presets = matchingPresets(squad);
+    if (!presets.length) return;
+    burstPresetsBox.append(el('p', 'field-note', t('이 편성에서 자주 쓰는 고정 순환')));
+    for (const preset of presets) {
+      const button = el('button', 'roster-import',
+        t('고정 순환 적용: {pattern}', { pattern: preset.pattern.map(resolveDisplayName).join(' → ') }));
+      (button as HTMLButtonElement).type = 'button';
+      button.addEventListener('click', () => {
+        burstPicks = { ...burstPicks, ...presetPicks(preset, burstCycles) };
+        burstAt = firstUnpicked();
+        showBurstMsg('');
+        renderBurstOrder();
+      });
+      burstPresetsBox.append(button);
+    }
+  }
+
   function openBurstOrder(): void {
     const deck = activeDeck();
     if (!deck.squad.some((name) => name.trim())) {
@@ -3460,6 +3483,7 @@ export function mountCalculator(root: HTMLElement, deps: CalculatorDependencies)
       : (measured !== null
         ? t('지난 계산에서 풀버스트가 {n}번 돌았습니다.', { n: measured })
         : t('전투 {n}초로 어림한 값입니다. 한 번 계산해 보면 실제 횟수로 맞춰집니다.', { n: readBattle().duration }));
+    renderBurstPresets(deck.squad);
     burstSteps = stepsFor(burstCycles);
     burstAt = firstUnpicked();
     showBurstMsg('');
