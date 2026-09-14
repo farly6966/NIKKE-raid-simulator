@@ -9,7 +9,7 @@ import { mountCalculator, type CalculatorClientLike } from './ui';
 import { CalculationCancelled } from './worker-client';
 import { setLang, setLocaleNames } from './i18n';
 import { decodeBattleCode, encodeBattleCode, encodeShareCode, decodeUnionCode } from './share-code';
-import { encodeUnionDraft, decodeUnionDraft, unionCodeOf } from './union-raid';
+import { encodeUnionDraft, decodeUnionDraft, unionCodeOf, DECK_SLOTS } from './union-raid';
 import { UNION_BOSS_SEASONS } from './union-bosses';
 import './styles.css';
 import type {
@@ -550,8 +550,8 @@ describe('calculator UI', () => {
     const code = encodeShareCode([{ id: 1, squad: names.slice(0, 5), characters: {} }], false);
     localStorage.setItem('nikke-union-board-v2', encodeUnionDraft(Array.from({ length: 5 }, (_, index) => ({
       name: `Test ${index + 1}`, code: 'NK3-eyJlYyI6M30', enabled: index === 0 || (fourJobs && index === 1),
-      decks: Array.from({ length: 3 }, (_, deckIndex) => ({
-        code: deckIndex === 0 || (fourJobs && index === 0) ? code : '',
+      decks: Array.from({ length: DECK_SLOTS }, (_, deckIndex) => ({
+        code: deckIndex === 0 || (fourJobs && index === 0 && deckIndex < 3) ? code : '',
       })),
     }))));
   }

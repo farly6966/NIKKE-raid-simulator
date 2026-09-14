@@ -48,6 +48,26 @@ describe('global staged union raid planner', () => {
     }
   }, 30_000);
 
+  it('respects alreadyUsed to cap a member below the normal three attacks', () => {
+    const a = candidate(0, 0, 0, 0);
+    const b = candidate(1, 0, 1, 1);
+    const c = candidate(2, 0, 2, 2);
+    const hp = Array.from({ length: 3 }, () => Array(5).fill(500 * RAID_DAMAGE_SCALE));
+    const plan = optimizeRaidPlan({ phases: hp, candidates: [a, b, c], alreadyUsed: { m0: 2 } }, solve);
+    const member = plan.members.find(m => m.memberId === 'm0')!;
+    expect(member.capacity).toBe(1);
+    expect(member.shots.length).toBeLessThanOrEqual(1);
+  }, 30_000);
+
+  it('drops a member to zero remaining attacks once alreadyUsed reaches three', () => {
+    const a = candidate(0, 0, 0, 0);
+    const hp = Array.from({ length: 3 }, () => Array(5).fill(500 * RAID_DAMAGE_SCALE));
+    const plan = optimizeRaidPlan({ phases: hp, candidates: [a], alreadyUsed: { m0: 3 } }, solve);
+    const member = plan.members.find(m => m.memberId === 'm0');
+    expect(member?.capacity ?? 0).toBe(0);
+    expect(member?.shots.length ?? 0).toBe(0);
+  }, 30_000);
+
   it('does not assign attacks to a locked later phase when phase one cannot clear', () => {
     const candidates = Array.from({ length: 5 }, (_, boss) => candidate(boss, boss, boss, 0));
     const hp = Array.from({ length: 3 }, () => Array(5).fill(50 * RAID_DAMAGE_SCALE));

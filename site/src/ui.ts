@@ -46,6 +46,7 @@ import {
 import { mountSharePanel, squadPreview, type SharePanel } from './share-panel';
 import { startPresence } from './presence';
 import { mountUnionRaid, type UnionHandle } from './union-raid';
+import { mountLiveRaid } from './union-raid-live-view';
 import { mountBossMaker, type BossMakerHandle } from './boss-maker-view';
 import { EXTERNAL_LINKS, hostOf } from './external-links';
 import { createElementIcon } from './i18n-terms';
@@ -57,6 +58,7 @@ import {
   picksFrom, progressOf, sequenceForDeck, sequenceFrom, stepKey, stepsFor, trimSequence,
   type BurstStage, type BurstStep,
 } from './burst-order';
+import { matchingPresets, presetPicks } from './burst-presets';
 import { ShareServer, summarizeBattle, summarizeSquad } from './share-server';
 import { createTimelineBlock } from './timeline';
 
@@ -528,6 +530,7 @@ export function mountCalculator(root: HTMLElement, deps: CalculatorDependencies)
       <nav class="view-tabs" aria-label="화면 전환">
         <button type="button" class="view-tab is-on" data-view-tab="calc" aria-pressed="true">계산기</button>
         <button type="button" class="view-tab" data-view-tab="union" aria-pressed="false">유니온 레이드<b class="tab-beta">BETA</b></button>
+        <button type="button" class="view-tab" data-view-tab="live" aria-pressed="false">實戰推演<b class="tab-beta">BETA</b></button>
         <button type="button" class="view-tab" data-view-tab="enikk" aria-pressed="false">ENIKK 조합 가져오기</button>
         <button type="button" class="view-tab" data-view-tab="links" aria-pressed="false">외부고리</button>
       </nav>
@@ -550,7 +553,7 @@ export function mountCalculator(root: HTMLElement, deps: CalculatorDependencies)
           <button type="button" class="union-mode" data-union-mode="personal" aria-pressed="false">個人用</button>
         </div>
         <p class="union-lede" data-union-lede-union>用聯盟成員<b>各自的實際規格與同步器等級</b>,跑同一個 Boss・同一套隊伍,比較誰能貢獻多少。只有公開妮姬清單的人才能計算。</p>
-        <p class="union-lede" data-union-lede-personal hidden>只用<b>我自己的規格</b>。不必匯入名單,每個 Boss 掛不同戰鬥條件、最多跑三套隊伍一眼比較 — 沿用計算機裡的同步器・主控台・妮姬養成。<b>同步器可以直接在這張表裡改</b>(有連動 Blablalink 的話會帶入帳號值)。</p>
+        <p class="union-lede" data-union-lede-personal hidden>只用<b>我自己的規格</b>。不必匯入名單,每個 Boss 掛不同戰鬥條件、最多跑六套隊伍一眼比較 — 沿用計算機裡的同步器・主控台・妮姬養成。<b>同步器可以直接在這張表裡改</b>(有連動 Blablalink 的話會帶入帳號值)。</p>
 
         <div class="union-step" data-union-step="1">
           <h3>匯入成員資料</h3>
@@ -674,6 +677,33 @@ export function mountCalculator(root: HTMLElement, deps: CalculatorDependencies)
           <div class="union-raid-planner" data-union-raid-planner></div>
           <div class="union-grid-box" data-union-grid></div>
           <div class="union-report" data-union-report></div>
+        </div>
+      </section>
+
+      <section class="panel live-raid-panel" data-view="live" aria-labelledby="live-heading" hidden>
+        <div class="section-heading">
+          <div><p class="step">LIVE</p><h2 id="live-heading">實戰推演 <b class="beta-tag">BETA</b></h2></div>
+        </div>
+        <p class="field-note">匯入聯盟戰分頁「匯出試算結果」存的 JSON 檔，現場邊打邊記錄實際傷害，系統自動用剩下的人和刀重算最優解。這個分頁不需要名單或編成，跟聯盟戰分頁的操作互不影響——現場操作的人不必是排隊型的人。</p>
+
+        <div class="live-import" data-live-import>
+          <label class="union-drop" data-live-drop>
+            <input type="file" accept=".json,application/json" data-live-file hidden>
+            <b>把試算結果 JSON 拖到這裡</b>
+            <span>或點一下選擇檔案</span>
+          </label>
+          <p class="union-status" data-live-import-status></p>
+        </div>
+
+        <div class="live-board" data-live-board hidden>
+          <div class="live-toolbar">
+            <button type="button" class="roster-import" data-live-reimport>重新匯入</button>
+            <button type="button" class="roster-import danger" data-live-reset>清空現場紀錄</button>
+            <span class="union-status" data-live-status aria-live="polite"></span>
+          </div>
+          <div class="live-phases" data-live-phases></div>
+          <div class="live-overview" data-live-overview></div>
+          <div class="live-bosses" data-live-bosses></div>
         </div>
       </section>
 
@@ -989,6 +1019,7 @@ export function mountCalculator(root: HTMLElement, deps: CalculatorDependencies)
             <button type="button" class="roster-import" data-burst-order-reset>처음부터</button>
           </div>
           <p class="burst-order-hint" data-burst-cycles-note></p>
+          <div class="burst-order-presets" data-burst-presets></div>
           <div class="burst-now" data-burst-now></div>
           <div class="burst-picks" data-burst-picks></div>
           <div class="burst-order-list" data-burst-list></div>
@@ -3269,6 +3300,7 @@ export function mountCalculator(root: HTMLElement, deps: CalculatorDependencies)
   const burstModal = element<HTMLElement>(root, '[data-burst-order-modal]');
   const burstOpenButton = element<HTMLButtonElement>(root, '[data-burst-order-open]');
   const burstBadge = element<HTMLElement>(root, '[data-burst-order-badge]');
+  const burstPresetsBox = element<HTMLElement>(root, '[data-burst-presets]');
   const burstNow = element<HTMLElement>(root, '[data-burst-now]');
   const burstPicksBox = element<HTMLElement>(root, '[data-burst-picks]');
   const burstList = element<HTMLElement>(root, '[data-burst-list]');
@@ -3442,6 +3474,26 @@ export function mountCalculator(root: HTMLElement, deps: CalculatorDependencies)
     renderBurstOrder();
   }
 
+  /** 편성에 맞는 고정 순환 후보를 버튼으로. 누르면 그 단계 picks만 덮어쓴다(다른 단계는 그대로). */
+  function renderBurstPresets(squad: string[]): void {
+    burstPresetsBox.replaceChildren();
+    const presets = matchingPresets(squad);
+    if (!presets.length) return;
+    burstPresetsBox.append(el('p', 'field-note', t('이 편성에서 자주 쓰는 고정 순환')));
+    for (const preset of presets) {
+      const button = el('button', 'roster-import',
+        t('고정 순환 적용: {pattern}', { pattern: preset.pattern.map(resolveDisplayName).join(' → ') }));
+      (button as HTMLButtonElement).type = 'button';
+      button.addEventListener('click', () => {
+        burstPicks = { ...burstPicks, ...presetPicks(preset, burstCycles) };
+        burstAt = firstUnpicked();
+        showBurstMsg('');
+        renderBurstOrder();
+      });
+      burstPresetsBox.append(button);
+    }
+  }
+
   function openBurstOrder(): void {
     const deck = activeDeck();
     if (!deck.squad.some((name) => name.trim())) {
@@ -3460,6 +3512,7 @@ export function mountCalculator(root: HTMLElement, deps: CalculatorDependencies)
       : (measured !== null
         ? t('지난 계산에서 풀버스트가 {n}번 돌았습니다.', { n: measured })
         : t('전투 {n}초로 어림한 값입니다. 한 번 계산해 보면 실제 횟수로 맞춰집니다.', { n: readBattle().duration }));
+    renderBurstPresets(deck.squad);
     burstSteps = stepsFor(burstCycles);
     burstAt = firstUnpicked();
     showBurstMsg('');
@@ -4281,7 +4334,7 @@ export function mountCalculator(root: HTMLElement, deps: CalculatorDependencies)
   // 300명을 한 줄로 늘어놓으면 스크롤이 끝없다 — 열 명씩 끊어 쪽으로 넘긴다.
   const ENIKK_PER_PAGE = 10;
   let enikkPage = 0;
-  let currentView: 'calc' | 'union' | 'enikk' | 'links' = 'calc';
+  let currentView: 'calc' | 'union' | 'live' | 'enikk' | 'links' = 'calc';
 
   const readEnikkCache = (): EnikkImport | null => {
     try {
@@ -4823,10 +4876,24 @@ export function mountCalculator(root: HTMLElement, deps: CalculatorDependencies)
     });
   }
 
+  // ── 실전 추연 (BETA) ────────────────────────────────────────────────────
+  // 유니온 탭과는 완전히 분리한다 — 명단·편성 같은 준비 단계가 필요 없고, 입력은
+  // 「匯出試算結果」로 받은 JSON 파일 하나뿐이다(union-raid-live-view.ts를 본다).
+  const livePanel = root.querySelector<HTMLElement>('[data-view="live"]');
+  if (livePanel) {
+    mountLiveRaid({ panel: livePanel }, {
+      imageOf: (name) => {
+        const image = catalogByName.get(name)?.image;
+        return image ? `${import.meta.env.BASE_URL}${image}` : undefined;
+      },
+      labelOf: resolveDisplayName,
+    });
+  }
+
   // ── 화면 전환 ───────────────────────────────────────────────────────────
   // 유니온 탭이 없는 배포(프록시 미설정)에서는 손잡이도 없다.
   /** 위쪽 탭이 고를 수 있는 화면. 「외부고리」는 우리 것이 아닌 곳으로 나가는 판이다. */
-  type ViewName = 'calc' | 'union' | 'enikk' | 'links';
+  type ViewName = 'calc' | 'union' | 'live' | 'enikk' | 'links';
 
   function switchView(view: ViewName) {
     currentView = view;

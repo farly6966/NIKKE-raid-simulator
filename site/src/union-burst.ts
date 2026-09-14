@@ -1,4 +1,5 @@
 import { BURST_STAGES, MAX_CYCLES, candidatesFor, estimateCycles, trimSequence, type BurstSequence } from './burst-order';
+import { matchingPresets, presetSequence } from './burst-presets';
 import type { CharacterMeta, DeckState } from './types';
 
 export function cleanNoBurst(raw: unknown, squad: string[]): string[] {
@@ -47,6 +48,23 @@ export function createUnionBurstEditor(options: {
   box.append(note);
   if (!options.squad.some(Boolean)) { note.textContent = '先放入角色，再設定逐輪爆裂。'; return box; }
   let sequence: BurstSequence = cleanUnionSequence(options.sequence, options.squad) ?? [{ 1: [], 2: [], 3: [] }];
+  const presets = matchingPresets(options.squad);
+  if (presets.length) {
+    const presetBox = document.createElement('div'); presetBox.className = 'union-burst-presets';
+    const presetLabel = document.createElement('p'); presetLabel.className = 'field-note';
+    presetLabel.textContent = '這個編成常用的固定循環：';
+    presetBox.append(presetLabel);
+    for (const preset of presets) {
+      const button = document.createElement('button'); button.type = 'button'; button.className = 'roster-import';
+      button.textContent = `套用 B${preset.stage} 固定循環：${preset.pattern.map(options.labelOf).join(' → ')}`;
+      button.addEventListener('click', () => {
+        sequence = presetSequence(preset, Math.max(sequence.length, estimateCycles(options.duration)), sequence);
+        draw(); save();
+      });
+      presetBox.append(button);
+    }
+    box.append(presetBox);
+  }
   const countLabel = document.createElement('label'); countLabel.textContent = '編輯輪數';
   const count = document.createElement('input'); count.type = 'number'; count.min = '1'; count.max = String(MAX_CYCLES);
   count.step = '1'; count.value = String(sequence.length); count.className = 'union-boss-num'; count.ariaLabel = '編輯輪數';
