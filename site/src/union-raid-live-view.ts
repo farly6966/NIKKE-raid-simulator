@@ -202,7 +202,10 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
     row.append(el('span', 'live-shot-member', shot.memberName));
     if (changed) row.append(el('span', 'live-shot-flag', '🔄 剛重新分配'));
 
-    const options = base!.candidates.filter((c) => c.memberId === shot.memberId && c.bossIndex === shot.bossIndex);
+    // 이 사람이 이 왕에 아직 안 쏜 후보만 — 이미 확정된 (사람·왕·덱)을 또 고르면
+    // 같은 조합이 두 번 나간 걸로 잡혀 혈량·한도 계산이 어긋난다.
+    const options = remainingCandidates(base!.candidates, fired)
+      .filter((c) => c.memberId === shot.memberId && c.bossIndex === shot.bossIndex);
     const preview = el('span', 'live-shot-preview');
     const deckSelect = el('select', 'live-deck-select');
     deckSelect.ariaLabel = `${shot.memberName} 實際隊伍`;
