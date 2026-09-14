@@ -169,6 +169,8 @@ function buildModel(
   const damageTerms = (phase: number, boss: number): string[] => variables
     .filter(variable => variable.phase === phase && candidates[variable.candidate]!.bossIndex === boss)
     .map(variable => `${scaledDamage(candidates[variable.candidate]!.damage)} ${variable.name}`);
+  const negatedDamageTerms = (phase: number, boss: number): string[] => damageTerms(phase, boss)
+    .map(term => `- ${term}`);
 
   const objectiveTerms = finiteTarget
     ? Array.from({ length: 5 }, (_, boss) => `y_${boss}`)
@@ -200,7 +202,8 @@ function buildModel(
   if (finiteTarget) {
     for (let boss = 0; boss < 5; boss++) {
       const hp = scaledHp(input.phases[targetPhase]![boss]!);
-      lines.push(` effective_damage_${boss}: y_${boss} - ${sum(damageTerms(targetPhase, boss))} <= 0`);
+      const negated = negatedDamageTerms(targetPhase, boss);
+      lines.push(` effective_damage_${boss}: y_${boss}${negated.length ? ` ${negated.join(' ')}` : ''} <= 0`);
       lines.push(` effective_cap_${boss}: y_${boss} <= ${hp}`);
     }
     if (mode === 'tie') lines.push(` keep_objective: ${sum(objectiveTerms)} >= ${Math.floor(fixedObjective + 0.5)}`);

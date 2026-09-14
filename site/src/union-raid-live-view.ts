@@ -110,13 +110,15 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
         status.textContent = '';
         renderAll(previous);
       } else {
-        status.textContent = `重算失敗：${event.data.message ?? '未知錯誤'}`;
+        status.textContent = `重算失敗：${event.data.message ?? '未知錯誤'}（已確認的紀錄不會遺失，但暫時算不出新的建議出刀）`;
+        renderAll(lastPendingKeys);
       }
     });
     next.addEventListener('error', (event) => {
       if (worker !== next) return;
       next.terminate(); worker = undefined;
       status.textContent = `重算失敗：${event.message}`;
+      renderAll(lastPendingKeys);
     });
     next.postMessage(input);
   }
@@ -238,6 +240,13 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
         status.textContent = '請選擇實際隊伍並填入大於 0 的傷害。';
         return;
       }
+      const alreadyFired = fired.some((row) => row.memberId === shot.memberId
+        && row.bossIndex === shot.bossIndex && row.deckIndex === picked.deckIndex);
+      if (alreadyFired) {
+        status.textContent = '這一發剛剛已經確認過了，畫面正在重新整理。';
+        renderAll(lastPendingKeys);
+        return;
+      }
       fired.push({
         memberId: shot.memberId, memberName: shot.memberName, bossIndex: shot.bossIndex, bossName: shot.bossName,
         phase: shot.phase, deckIndex: picked.deckIndex, squad: picked.squad, damage: damage * YI,
@@ -255,15 +264,20 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
     const bossName = base!.candidates.find((c) => c.bossIndex === bossIndex)?.bossName || `第 ${bossIndex + 1} 王`;
     const confirmedHere = fired.filter((shot) => shot.phase === phase && shot.bossIndex === bossIndex);
 
+    const trueRemaining = confirmedHere.reduce(
+      (hp, shot) => Math.max(0, hp - shot.damage),
+      base!.phases[phase]?.[bossIndex] ?? 0,
+    );
+    const trulyCleared = trueRemaining <= 0;
+
     const wrap = el('details', 'live-boss-block');
-    wrap.open = !(bar?.cleared ?? false);
+    wrap.open = !trulyCleared;
     const summary = el('summary');
-    if (bar?.cleared) {
-      summary.textContent = `✓ ${bossName} · 已清 · 打完後剩餘 ${yi(bar.remaining ?? 0)}`;
+    if (trulyCleared) {
+      summary.textContent = `✓ ${bossName} · 已清 · 打完後剩餘 ${yi(trueRemaining)}`;
     } else {
-      const remain = bar ? yi(bar.remaining ?? 0) : '—';
       const left = bar?.shots.length ?? 0;
-      summary.textContent = `${bossName} · 進行中 · 剩餘 ${remain}${left ? ` · 還差 ${left} 刀` : ''}`;
+      summary.textContent = `${bossName} · 進行中 · 剩餘 ${yi(trueRemaining)}${left ? ` · 還差 ${left} 刀` : ''}`;
     }
     wrap.append(summary);
 
@@ -273,11 +287,15 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
       runningHp = Math.max(0, runningHp - shot.damage);
       body.append(renderConfirmedRow(shot, index + 1, runningHp));
     });
-    bar?.shots.forEach((shot, index) => {
-      const changed = previousKeys.size > 0 && !previousKeys.has(pendingKey(shot));
-      body.append(renderPendingRow(shot, confirmedHere.length + index + 1, changed));
-    });
-    if (!confirmedHere.length && !(bar?.shots.length)) body.append(el('p', 'field-note', '這一階段沒有排這個王的候選。'));
+    if (!trulyCleared) {
+      bar?.shots.forEach((shot, index) => {
+        const changed = previousKeys.size > 0 && !previousKeys.has(pendingKey(shot));
+        body.append(renderPendingRow(shot, confirmedHere.length + index + 1, changed));
+      });
+    }
+    if (!trulyCleared && !confirmedHere.length && !(bar?.shots.length)) {
+      body.append(el('p', 'field-note', '這一階段沒有排這個王的候選。'));
+    }
     wrap.append(body);
     return wrap;
   }

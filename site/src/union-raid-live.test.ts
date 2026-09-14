@@ -31,6 +31,18 @@ describe('remainingCandidates', () => {
     const left = remainingCandidates([planned, actual], [shot(actual, 0)]);
     expect(left).toEqual([planned]);
   });
+
+  it('removes later squads that reuse a character already confirmed by the same member', () => {
+    const firedCandidate = candidate(0, 0, 0, 0);
+    const overlapping = candidate(1, 0, 1, 1);
+    overlapping.squad[0] = firedCandidate.squad[0]!;
+    const independent = candidate(2, 0, 2, 2);
+
+    expect(remainingCandidates(
+      [firedCandidate, overlapping, independent],
+      [shot(firedCandidate, 0)],
+    )).toEqual([independent]);
+  });
 });
 
 describe('remainingPhases', () => {

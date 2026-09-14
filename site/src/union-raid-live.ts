@@ -26,12 +26,27 @@ export interface FiredShot {
 const shotKey = (row: { memberId: string; bossIndex: number; deckIndex: number }): string =>
   `${row.memberId}::${row.bossIndex}::${row.deckIndex}`;
 
-/** 이미 쐈다고 확정한 것들을 빼고 남은 후보만. 같은 (사람·왕·덱)은 한 번만 나갈 수 있다. */
+function usedCharactersByMember(fired: FiredShot[]): Map<string, Set<string>> {
+  const map = new Map<string, Set<string>>();
+  for (const shot of fired) {
+    const set = map.get(shot.memberId) ?? new Set<string>();
+    for (const name of shot.squad) set.add(name);
+    map.set(shot.memberId, set);
+  }
+  return map;
+}
+
+/** 이미 쐈다고 확정한 것들과 같은 조합 또는 이미 쓴 캐릭터가 겹치는 후보를 뺀다. */
 export function remainingCandidates(
   all: RaidPlannerCandidate[], fired: FiredShot[],
 ): RaidPlannerCandidate[] {
   const used = new Set(fired.map(shotKey));
-  return all.filter((candidate) => !used.has(shotKey(candidate)));
+  const usedCharacters = usedCharactersByMember(fired);
+  return all.filter((candidate) => {
+    if (used.has(shotKey(candidate))) return false;
+    const characters = usedCharacters.get(candidate.memberId);
+    return !characters || !candidate.squad.some((name) => characters.has(name));
+  });
 }
 
 /**

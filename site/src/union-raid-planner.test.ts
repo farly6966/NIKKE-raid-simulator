@@ -77,5 +77,26 @@ describe('global staged union raid planner', () => {
     expect(plan.bars.flatMap(bar => bar.shots).every(shot => shot.phase === 0)).toBe(true);
     expect(plan.bars.find(bar => bar.phase === 0 && bar.bossIndex === 0)?.cleared).toBe(false);
   }, 30_000);
+
+  it('combines damage from multiple members attacking the same boss', () => {
+    let id = 0;
+    const candidates = [
+      candidate(id++, 0, 0, 0, 60),
+      candidate(id++, 1, 0, 0, 60),
+      candidate(id++, 2, 1, 0, 60),
+      candidate(id++, 3, 2, 0, 60),
+      candidate(id++, 4, 3, 0, 60),
+      candidate(id++, 5, 4, 0, 60),
+    ];
+    const hp = Array.from({ length: 3 }, () => Array(5).fill(500 * RAID_DAMAGE_SCALE));
+    hp[0] = [100, 50, 50, 50, 50].map(value => value * RAID_DAMAGE_SCALE);
+
+    const plan = optimizeRaidPlan({ phases: hp, candidates }, solve);
+    const boss0 = plan.bars.find(bar => bar.phase === 0 && bar.bossIndex === 0)!;
+
+    expect(boss0.cleared).toBe(true);
+    expect(boss0.shots).toHaveLength(2);
+    expect(plan.reached).toBe('phase2');
+  }, 30_000);
 });
 
