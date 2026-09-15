@@ -2984,7 +2984,7 @@ export function mountCalculator(root: HTMLElement, deps: CalculatorDependencies)
         enemyCode: battle.enemyCode,
         corePx: battle.coreEnabled ? battle.corePx : 0,
         hasParts: battle.hasParts,
-        siteUrl: 'farly6966.github.io/nikke-calc-t1',
+        siteUrl: 'farly6966.github.io/NIKKE-raid-simulator',
         // 덱에 붙인 이름을 이미지에도 잇는다 — 자료를 모을 때 한 장으로 끝나게.
         deckNames: Object.fromEntries(decks.map((deck) => [deck.id, deckLabelFull(deck)])),
         // 그림에도 화면과 같은 이름이 적혀야 한다 — 커뮤니티에 그대로 붙여넣는 그림이다.
