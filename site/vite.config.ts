@@ -5,7 +5,7 @@ import { defineConfig } from 'vitest/config';
 const buildId = JSON.stringify(Date.now().toString(36));
 
 export default defineConfig({
-  base: '/nikke-calc-t1/',
+  base: '/NIKKE-raid-simulator/',
   define: {
     __BUILD_ID__: buildId,
   },
