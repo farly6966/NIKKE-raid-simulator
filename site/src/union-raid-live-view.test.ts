@@ -133,4 +133,67 @@ describe('live raid confirmed-state rendering', () => {
     const fired = JSON.parse(localStorage.getItem('nikke-live-raid-fired-v1')!) as unknown[];
     expect(fired).toHaveLength(1);
   });
+
+  it('shows portraits and team names instead of T1/T2 codes', () => {
+    const named = { ...candidate, deckLabel: '紅蓮速攻' };
+    localStorage.setItem('nikke-live-raid-base-v1', JSON.stringify({ ...base, candidates: [named] }));
+    const panel = host();
+    mountLiveRaid({ panel }, { imageOf: name => `/img/${name}.webp`, labelOf: name => name });
+    const planned = plan(false);
+    planned.bars[0]!.shots[0]!.deckLabel = '紅蓮速攻';
+    FakeWorker.instances[0]!.emit({ kind: 'done', plan: planned });
+
+    expect(panel.textContent).not.toMatch(/T1|B1-T1/);
+    expect(panel.querySelector('.live-recommendation')!.textContent).toContain('紅蓮速攻');
+    expect(panel.querySelectorAll('.live-recommendation img.share-portrait')).toHaveLength(5);
+    const pending = panel.querySelector('.live-shot-row.is-pending')!;
+    expect(pending.textContent).toContain('紅蓮速攻');
+    expect(pending.querySelectorAll('img.share-portrait')).toHaveLength(5);
+    // 只有一隊可選時不顯示「換隊伍」。
+    expect(pending.querySelector('.live-team-swap')).toBeNull();
+  });
+
+  it('lets the player switch teams by clicking portraits and records the chosen team', () => {
+    const second: RaidPlannerCandidate = {
+      ...candidate, id: 1, deckIndex: 1, deckLabel: '水冷隊', damage: 45 * 100_000_000,
+      squad: ['角色F', '角色G', '角色H', '角色I', '角色J'],
+    };
+    localStorage.setItem('nikke-live-raid-base-v1', JSON.stringify({ ...base, candidates: [candidate, second] }));
+    const panel = host();
+    mountLiveRaid({ panel }, { imageOf: () => undefined, labelOf: name => name });
+    FakeWorker.instances[0]!.emit({ kind: 'done', plan: plan(false) });
+
+    const pending = panel.querySelector<HTMLElement>('.live-shot-row.is-pending')!;
+    const options = [...pending.querySelectorAll<HTMLButtonElement>('.live-team-swap .live-team-option')];
+    expect(options).toHaveLength(2);
+    expect(options[0]!.getAttribute('aria-checked')).toBe('true');
+    expect(options[1]!.textContent).toContain('水冷隊');
+    options[1]!.click();
+    expect(options[1]!.getAttribute('aria-checked')).toBe('true');
+    expect(pending.querySelector<HTMLInputElement>('.live-damage-input')!.value).toBe('45.00');
+    expect(pending.querySelector('.live-shot-preview')!.textContent).toContain('水冷隊');
+
+    pending.querySelector<HTMLButtonElement>(':scope > button')!.click();
+    const fired = JSON.parse(localStorage.getItem('nikke-live-raid-fired-v1')!) as Array<{ deckIndex: number; deckLabel?: string }>;
+    expect(fired).toEqual([expect.objectContaining({ deckIndex: 1, deckLabel: '水冷隊' })]);
+  });
+
+  it('uses a portrait picker in the manual recorder too', () => {
+    const second: RaidPlannerCandidate = {
+      ...candidate, id: 1, deckIndex: 1, damage: 45 * RAID_DAMAGE_SCALE,
+      squad: ['角色F', '角色G', '角色H', '角色I', '角色J'],
+    };
+    localStorage.setItem('nikke-live-raid-base-v1', JSON.stringify({ ...base, candidates: [candidate, second] }));
+    const panel = host();
+    mountLiveRaid({ panel }, { imageOf: () => undefined, labelOf: name => name });
+
+    const card = panel.querySelector<HTMLElement>('.live-recorder-card')!;
+    expect(card.querySelector('select[aria-label="實際使用隊伍"]')).toBeNull();
+    const options = [...card.querySelectorAll<HTMLButtonElement>('.live-team-option')];
+    expect(options).toHaveLength(2);
+    options[1]!.click();
+    card.querySelector<HTMLButtonElement>('.live-recorder-controls button')!.click();
+    const fired = JSON.parse(localStorage.getItem('nikke-live-raid-fired-v1')!) as Array<{ deckIndex: number }>;
+    expect(fired).toEqual([expect.objectContaining({ deckIndex: 1 })]);
+  });
 });

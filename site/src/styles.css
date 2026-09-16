@@ -1332,6 +1332,11 @@ button.roster-cell.is-taken { opacity: .35; cursor: not-allowed; }
 .union-deck { display: block; padding: 8px 0; border-top: 1px solid rgba(146,176,201,.12); }
 .union-deck:first-child { border-top: 0; }
 .union-deck-label { margin: 0 0 6px; color: var(--cyan); font: 700 11px inherit; }
+.union-deck-label-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 0 0 6px; }
+.union-deck-label-row .union-deck-label { margin: 0; }
+.union-deck-name { flex: 1 1 160px; max-width: 260px; min-height: 30px; padding: 4px 8px; border: 1px solid var(--line);
+  border-radius: 6px; background: rgba(3,9,16,.6); color: var(--ink); font: 400 12px inherit; }
+.union-deck-name:focus-visible { outline: 2px solid var(--cyan); outline-offset: 1px; }
 .union-slots { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; }
 .union-slot { position: relative; min-width: 0; }
 .union-slot-pick { display: flex; flex-direction: column; gap: 4px; width: 100%; padding: 6px;
@@ -2194,7 +2199,6 @@ body.bm-open { overflow: hidden; }
 .live-recorder-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; }
 .live-recorder-field { display: grid; gap: 4px; min-width: 130px; color: var(--muted); font-size: 10px; }
 .live-recorder-select { min-height: 36px; max-width: 220px; }
-.live-recorder-preview { display: flex; margin-top: 10px; min-height: 34px; }
 .live-overview { margin-bottom: 16px; overflow-x: auto; }
 .live-overview-table { width: 100%; border-collapse: collapse; font-size: 11px; }
 .live-overview-table th, .live-overview-table td { padding: 5px 8px; border-bottom: 1px solid var(--line);
@@ -2215,14 +2219,30 @@ body.bm-open { overflow: hidden; }
 .live-shot-flag { color: var(--amber); font-size: 10px; font-weight: 700; }
 .live-shot-preview { display: flex; }
 .live-shot-damage, .live-shot-remain { color: var(--muted); font: 700 10.5px ui-monospace, monospace; white-space: nowrap; }
-.live-deck-select { min-height: 36px; }
 .live-damage-input { width: 90px; min-height: 36px; padding: 4px 6px; border: 1px solid var(--line);
   background: rgba(3,9,16,.6); color: var(--ink); font: 400 11px ui-monospace, monospace; }
 .live-undo { margin-left: auto; padding: 5px 8px; font-size: 10px; }
+.live-team { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
+.live-team .share-decks { margin: 0; }
+.live-team-name { color: var(--ink); font-size: 11px; font-weight: 700; overflow-wrap: anywhere; }
+.live-recommendation-item { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.live-recorder-team-field { margin-top: 10px; min-width: 0; }
+.live-team-picker { display: flex; flex-wrap: wrap; gap: 6px; }
+.live-team-option { display: inline-flex; align-items: center; max-width: 100%; min-height: 44px; padding: 5px 8px; cursor: pointer;
+  border: 1px solid var(--line); border-radius: 8px; background: rgba(3,9,16,.45); color: var(--muted); text-align: left; }
+.live-team-option:hover { border-color: rgba(69,214,208,.5); }
+.live-team-option.is-on { border-color: var(--cyan); background: rgba(69,214,208,.12); color: var(--ink); }
+.live-team-option:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+.live-team-option .live-team-name { color: inherit; font-weight: 400; }
+.live-team-option.is-on .live-team-name { font-weight: 700; }
+.live-team-swap { flex: 1 0 100%; min-width: 0; }
+.live-team-swap > summary { cursor: pointer; width: max-content; color: var(--cyan); font-size: 11px; }
+.live-team-swap[open] > summary { margin-bottom: 6px; }
 @media (max-width: 600px) {
   .live-metrics { grid-template-columns: repeat(2, minmax(110px, 1fr)); }
   .live-recorder-field { min-width: calc(50% - 4px); }
   .live-shot-row { flex-direction: column; align-items: flex-start; }
   .live-undo { margin-left: 0; }
+  .live-team-swap { flex: none; width: 100%; }
 }
 .bm-layer-move:disabled { opacity: .25; cursor: default; }

@@ -81,6 +81,8 @@ export interface BossSlot {
 
 /** 덱 한 칸. 니케 이름 다섯만 쓴다 — 수치는 유니온원 각자의 것을 쓴다. */
 export interface DeckSlot {
+  /** 玩家好記的隊伍名稱（例如「紅蓮速攻」）。只存在本機盤面與試算匯出，不進分享碼。 */
+  label?: string;
   cubes?: UnionCubes;
   noBurst?: string[];
   code: string;
@@ -90,11 +92,25 @@ export interface DeckSlot {
   burstSequence?: BurstSequence;
 }
 
+/** 隊伍名稱的上限長度；超過的部分直接截掉。 */
+export const DECK_LABEL_MAX = 20;
+
+/** 隊伍名稱清理：去頭尾空白、壓掉換行、限制長度。空字串視為沒有名稱。 */
+export function cleanDeckLabel(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const text = [...value.replace(/\s+/g, ' ').trim()].slice(0, DECK_LABEL_MAX).join('');
+  return text || undefined;
+}
+
 /** Local board draft only: never store imported account data or credentials. */
-export function encodeUnionDraft(bosses: BossSlot[]): string {
+/**
+ * `withLabels: false` 用在「盤面有沒有變」的比較：隊伍名稱不影響模擬數值，
+ * 改名不應該讓已經算好的結果失效。
+ */
+export function encodeUnionDraft(bosses: BossSlot[], withLabels = true): string {
   return JSON.stringify(bosses.map(boss => ({
     name: boss.name, code: boss.code, enabled: boss.enabled, bossId: boss.bossId,
-    decks: boss.decks.map(deck => ({ code: deck.code, cubes: cleanUnionCubes(deck.cubes, deck.squad ?? []), cycle: deck.cycle ? {
+    decks: boss.decks.map(deck => ({ code: deck.code, label: withLabels ? cleanDeckLabel(deck.label) : undefined, cubes: cleanUnionCubes(deck.cubes, deck.squad ?? []), cycle: deck.cycle ? {
       burstReaction: deck.cycle.burstReaction, burstRegenTime: deck.cycle.burstRegenTime,
     } : undefined, burstSequence: cleanUnionSequence(deck.burstSequence, deck.squad ?? []), noBurst: cleanNoBurst(deck.noBurst, deck.squad ?? []) })),
   })));
@@ -109,6 +125,8 @@ export function decodeUnionDraft(text: string, names: string[]): BossSlot[] {
     const decks = Array.from({ length: DECK_SLOTS }, (_, index) => {
       const value = item.decks[index];
       const deck = readDeckCode({ code: typeof value?.code === 'string' ? value.code : '' }, names);
+      const label = cleanDeckLabel(value?.label);
+      if (label) deck.label = label;
       deck.cubes = cleanUnionCubes(value?.cubes, deck.squad ?? []);
       deck.burstSequence = cleanUnionSequence(value?.burstSequence, deck.squad ?? []);
       deck.noBurst = cleanNoBurst(value?.noBurst, deck.squad ?? []);
@@ -624,6 +642,8 @@ export interface Job {
   bossIndex: number;
   bossName: string;
   deckIndex: number;
+  /** 這一隊的自訂名稱（沒有就不帶）。 */
+  deckLabel?: string;
   squad: string[];
   battle: BattleSettings;
   burstSequence?: BurstSequence;
@@ -648,6 +668,7 @@ export function buildJobs(members: MemberRow[], bosses: BossSlot[]): Job[] {
           bossIndex,
           bossName: t(boss.name.trim()) || t('보스 {n}', { n: bossIndex + 1 }),
           deckIndex,
+          ...(cleanDeckLabel(deck.label) ? { deckLabel: cleanDeckLabel(deck.label) } : {}),
           squad: deck.squad,
           cubes: cleanUnionCubes(deck.cubes, deck.squad),
           burstSequence: cleanUnionSequence(deck.burstSequence, deck.squad),
@@ -970,9 +991,12 @@ export function mountUnionRaid(hosts: UnionHosts, deps: UnionDeps): UnionHandle 
   } catch { /* Storage can be unavailable. */ }
   let resultBoard = '';
   let resultsInvalidated = false;
-  const boardState = () => encodeUnionDraft(bosses);
+  const boardState = () => encodeUnionDraft(bosses, false);
+  const persistDraft = () => {
+    try { localStorage.setItem(draftKey, encodeUnionDraft(bosses)); } catch { /* Storage can be unavailable. */ }
+  };
   const invalidateResults = () => {
-    try { localStorage.setItem(draftKey, boardState()); } catch { /* Storage can be unavailable. */ }
+    persistDraft();
     if ((results.length || running) && resultBoard !== boardState()) {
       resultsInvalidated = true;
       if (running) cancelled = true;
@@ -1730,7 +1754,7 @@ export function mountUnionRaid(hosts: UnionHosts, deps: UnionDeps): UnionHandle 
       const { boss: at, deck: deckAt } = shareTarget;
       const boss = bosses[at];
       if (!boss) return;
-      boss.decks[deckAt] = readDeckCode({ code: item.code }, deps.catalogNames());
+      boss.decks[deckAt] = { ...readDeckCode({ code: item.code }, deps.catalogNames()), label: boss.decks[deckAt]?.label };
       const failed = boss.decks[deckAt]!.error;
       renderBosses();
       if (failed) throw new Error(failed);
@@ -2169,7 +2193,28 @@ export function mountUnionRaid(hosts: UnionHosts, deps: UnionDeps): UnionHandle 
       let extraHasSquad = false;
       boss.decks.forEach((deck, deckIndex) => {
         const row = el('div', 'union-deck');
-        row.append(el('p', 'union-deck-label', `第 ${deckIndex + 1} 隊`));
+        const labelRow = el('div', 'union-deck-label-row');
+        labelRow.append(el('p', 'union-deck-label', `第 ${deckIndex + 1} 隊`));
+        const nameInput = el('input', 'union-deck-name');
+        nameInput.type = 'text';
+        nameInput.maxLength = DECK_LABEL_MAX;
+        nameInput.placeholder = '隊伍名稱（選填）';
+        nameInput.title = '取個好記的名字，例如「紅蓮速攻」；實戰推演頁會顯示這個名稱';
+        nameInput.ariaLabel = `第 ${deckIndex + 1} 隊名稱`;
+        nameInput.value = deck.label ?? '';
+        nameInput.addEventListener('input', () => {
+          // 名稱不影響模擬數值，所以不清掉已算好的結果；匯出時才讀。
+          deck.label = cleanDeckLabel(nameInput.value);
+          // 已算好的結果也跟著改名 —— 同一個 squad 陣列代表還是這一格算出來的。
+          for (const row of results) {
+            if (row.job.bossIndex === index && row.job.deckIndex === deckIndex && row.job.squad === deck.squad) {
+              if (deck.label) row.job.deckLabel = deck.label; else delete row.job.deckLabel;
+            }
+          }
+          persistDraft();
+        });
+        labelRow.append(nameInput);
+        row.append(labelRow);
         const deckOutcome = el('p', 'union-boss-outcome', t('계산 결과 없음'));
         deckOutcome.dataset.deckOutcome = `${index}-${deckIndex}`;
         row.append(deckOutcome);
@@ -2186,9 +2231,9 @@ export function mountUnionRaid(hosts: UnionHosts, deps: UnionDeps): UnionHandle 
           const filled = squad.filter(Boolean);
           boss.decks[deckIndex] = filled.length > 0
             ? readDeckCode({ code: encodeShareCode(
-              [{ id: 1, squad: [...squad], characters: {} } as DeckState], false), cycle: deck.cycle, burstSequence: deck.burstSequence, noBurst: deck.noBurst, cubes: deck.cubes },
+              [{ id: 1, squad: [...squad], characters: {} } as DeckState], false), cycle: deck.cycle, burstSequence: deck.burstSequence, noBurst: deck.noBurst, cubes: deck.cubes, label: deck.label },
             deps.catalogNames())
-            : { code: '', squad: undefined, error: undefined };
+            : { code: '', squad: undefined, error: undefined, label: deck.label };
           renderBosses();
         });
 
@@ -2256,7 +2301,7 @@ export function mountUnionRaid(hosts: UnionHosts, deps: UnionDeps): UnionHandle 
         take.title = '直接帶入計算機裡目前排好的這一隊';
         take.addEventListener('click', () => {
           boss.decks[deckIndex] = readDeckCode({ code: deps.currentDeckCode(deckIndex),
-            burstSequence: deps.currentDeckSequence?.(deckIndex) }, deps.catalogNames());
+            burstSequence: deps.currentDeckSequence?.(deckIndex), label: deck.label }, deps.catalogNames());
           renderBosses();
         });
         tools.append(take);
@@ -2290,7 +2335,7 @@ export function mountUnionRaid(hosts: UnionHosts, deps: UnionDeps): UnionHandle 
         input.placeholder = t('덱 {n} 조합 코드 (NK2-…)', { n: deckIndex + 1 });
         input.value = deck.code;
         input.addEventListener('input', () => {
-          boss.decks[deckIndex] = readDeckCode({ code: input.value }, deps.catalogNames());
+          boss.decks[deckIndex] = { ...readDeckCode({ code: input.value }, deps.catalogNames()), label: deck.label };
           renderBosses();
         });
         codeFold.append(codeSummary, input);
@@ -2711,7 +2756,7 @@ export function mountUnionRaid(hosts: UnionHosts, deps: UnionDeps): UnionHandle 
           bar.shots.forEach((shot, index) => {
             const line = el('div', 'union-plan-shot');
             line.append(el('code', undefined, String(index + 1)), el('b', undefined, shot.memberName),
-              el('span', undefined, `第 ${shot.deckIndex + 1} 隊｜${shot.squad.map(deps.labelOf).join('／')}`),
+              el('span', undefined, `第 ${shot.deckIndex + 1} 隊${shot.deckLabel ? `「${shot.deckLabel}」` : ''}｜${shot.squad.map(deps.labelOf).join('／')}`),
               el('span', undefined, yi(shot.damage)),
               el('span', undefined, shot.remainingAfter === null ? '無限' : `剩 ${yi(shot.remainingAfter)}`));
             block.append(line);
@@ -2730,7 +2775,7 @@ export function mountUnionRaid(hosts: UnionHosts, deps: UnionDeps): UnionHandle 
         const row = el('tr'); row.append(el('th', undefined, member.memberName), el('td', undefined, String(member.capacity)));
         for (let index = 0; index < 3; index++) {
           const shot = member.shots[index];
-          row.append(el('td', undefined, shot ? `${shot.phase === 3 ? '無限' : `P${shot.phase + 1}`}・B${shot.bossIndex + 1}・T${shot.deckIndex + 1}（${yi(shot.damage)}）` : '—'));
+          row.append(el('td', undefined, shot ? `${shot.phase === 3 ? '無限' : `P${shot.phase + 1}`}・B${shot.bossIndex + 1}・${shot.deckLabel ?? `T${shot.deckIndex + 1}`}（${yi(shot.damage)}）` : '—'));
         }
         table.append(row);
       }

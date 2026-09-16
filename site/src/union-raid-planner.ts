@@ -15,6 +15,8 @@ export interface RaidPlannerCandidate {
   bossIndex: number;
   bossName: string;
   deckIndex: number;
+  /** 隊伍自訂名稱；舊的匯出檔沒有這個欄位。 */
+  deckLabel?: string;
   squad: string[];
   damage: number;
 }
@@ -121,6 +123,7 @@ export function plannerCandidates(results: JobResult[]): RaidPlannerCandidate[] 
       bossIndex: row.job.bossIndex,
       bossName: row.job.bossName,
       deckIndex: row.job.deckIndex,
+      ...(row.job.deckLabel ? { deckLabel: row.job.deckLabel } : {}),
       squad: row.job.squad.filter(Boolean),
       damage: row.damage,
     };

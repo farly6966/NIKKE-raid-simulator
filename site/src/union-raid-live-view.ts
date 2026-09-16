@@ -41,6 +41,10 @@ const pendingKey = (shot: { phase: number; bossIndex: number; memberId: string; 
 
 const PHASE_LABELS = ['第 1 階段', '第 2 階段', '第 3 階段', '無限五王'];
 
+/** 玩家看得懂的隊伍稱呼：有自訂名稱就用名稱，沒有才退回「第 N 隊」。 */
+export const deckTitle = (deck: { deckIndex: number; deckLabel?: string }): string =>
+  deck.deckLabel?.trim() || `第 ${deck.deckIndex + 1} 隊`;
+
 /**
  * 「실전 추연(BETA)」 — 미리 낸 시뮬레이션 결과를 불러와, 현장에서 확정되는 대로
  * 남은 문제를 계속 다시 푼다.
@@ -129,6 +133,60 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
 
   const currentPhase = (): number => base ? actualPhaseIndex(base.phases, fired) : 0;
 
+  /** 一隊的樣子：五張頭像＋名稱（有取名才顯示名稱文字，沒取名只看頭像就好）。 */
+  function teamBadge(deck: { deckIndex: number; deckLabel?: string; squad: string[] }, extra?: string): HTMLElement {
+    const box = el('span', 'live-team');
+    box.append(squadPreview([deck.squad], deps.imageOf, deps.labelOf));
+    const text = [deck.deckLabel?.trim(), extra].filter(Boolean).join(' · ');
+    if (text) box.append(el('span', 'live-team-name', text));
+    box.title = `${deckTitle(deck)}：${deck.squad.map(deps.labelOf).join('／')}`;
+    return box;
+  }
+
+  /**
+   * 用頭像挑隊伍。原生 <select> 放不進圖片，玩家又記不住 T1/T2，
+   * 所以改成一排排可點的隊伍按鈕（radiogroup 語意，鍵盤也能操作）。
+   */
+  function teamPicker(
+    options: RaidPlannerCandidate[], selected: number, label: string,
+    onPick: (candidate: RaidPlannerCandidate) => void,
+  ): HTMLElement {
+    const group = el('div', 'live-team-picker');
+    group.setAttribute('role', 'radiogroup');
+    group.ariaLabel = label;
+    const buttons: HTMLButtonElement[] = [];
+    const mark = (deckIndex: number): void => {
+      for (const button of buttons) {
+        const on = Number(button.dataset.deckIndex) === deckIndex;
+        button.classList.toggle('is-on', on);
+        button.setAttribute('aria-checked', String(on));
+        button.tabIndex = on ? 0 : -1;
+      }
+    };
+    options.forEach((option, index) => {
+      const button = el('button', 'live-team-option');
+      button.type = 'button';
+      button.setAttribute('role', 'radio');
+      button.dataset.deckIndex = String(option.deckIndex);
+      button.ariaLabel = `${deckTitle(option)}：${option.squad.map(deps.labelOf).join('、')}，預估 ${yi(option.damage)}`;
+      button.append(teamBadge(option, `預估 ${yi(option.damage)}`));
+      button.addEventListener('click', () => { mark(option.deckIndex); onPick(option); });
+      button.addEventListener('keydown', (event) => {
+        const step = event.key === 'ArrowDown' || event.key === 'ArrowRight' ? 1
+          : event.key === 'ArrowUp' || event.key === 'ArrowLeft' ? -1 : 0;
+        if (!step) return;
+        event.preventDefault();
+        const next = options[(index + step + options.length) % options.length]!;
+        mark(next.deckIndex); onPick(next);
+        buttons.find((b) => Number(b.dataset.deckIndex) === next.deckIndex)?.focus();
+      });
+      buttons.push(button);
+      group.append(button);
+    });
+    mark(options.some((o) => o.deckIndex === selected) ? selected : (options[0]?.deckIndex ?? -1));
+    return group;
+  }
+
   const capacityOf = (candidates: RaidPlannerCandidate[], subtractUsed: boolean): number => {
     const groups = new Map<string, RaidPlannerCandidate[]>();
     for (const candidate of candidates) {
@@ -202,8 +260,10 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
     } else {
       const list = el('div', 'live-recommendation-list');
       for (const shot of suggested) {
-        list.append(el('span', undefined,
-          `${bossName(shot.bossIndex)} → ${shot.memberName} · T${shot.deckIndex + 1} · 預估 ${yi(shot.damage)}`));
+        const item = el('span', 'live-recommendation-item');
+        item.append(el('b', undefined, `${bossName(shot.bossIndex)} → ${shot.memberName}`),
+          teamBadge(shot, `預估 ${yi(shot.damage)}`));
+        list.append(item);
       }
       recommendation.append(list);
     }
@@ -226,7 +286,9 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
     fired.push({
       memberId: candidate.memberId, memberName: candidate.memberName,
       bossIndex: candidate.bossIndex, bossName: candidate.bossName,
-      phase, deckIndex: candidate.deckIndex, squad: candidate.squad, damage: damageYi * YI,
+      phase, deckIndex: candidate.deckIndex,
+      ...(candidate.deckLabel ? { deckLabel: candidate.deckLabel } : {}),
+      squad: candidate.squad, damage: damageYi * YI,
     });
     persist();
     resolve();
@@ -260,30 +322,26 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
     }
     const memberSelect = el('select', 'live-recorder-select');
     memberSelect.ariaLabel = '實際出刀成員';
-    const deckSelect = el('select', 'live-recorder-select');
-    deckSelect.ariaLabel = '實際使用隊伍';
+    const deckBox = el('div', 'live-recorder-teams');
+    let pickedDeck: number | undefined;
     const damageInput = el('input', 'live-damage-input');
     damageInput.type = 'number'; damageInput.min = '0.01'; damageInput.step = '0.01';
     damageInput.placeholder = '例如 523.4'; damageInput.ariaLabel = '實際傷害（億）';
-    const preview = el('div', 'live-recorder-preview');
 
     const candidatesForSelection = (): RaidPlannerCandidate[] => remainingCandidates(base!.candidates, fired)
       .filter((candidate) => candidate.bossIndex === Number(bossSelect.value)
         && candidate.memberId === memberSelect.value);
     const updateDecks = (): void => {
-      deckSelect.replaceChildren(); preview.replaceChildren();
+      deckBox.replaceChildren();
       const options = candidatesForSelection();
-      for (const candidate of options) {
-        const option = document.createElement('option');
-        option.value = String(candidate.deckIndex);
-        option.textContent = `T${candidate.deckIndex + 1} · 預估 ${yi(candidate.damage)}`;
-        deckSelect.append(option);
-      }
       const picked = options[0];
-      if (picked) {
-        damageInput.value = (picked.damage / YI).toFixed(2);
-        preview.append(squadPreview([picked.squad], deps.imageOf, deps.labelOf));
-      } else damageInput.value = '';
+      pickedDeck = picked?.deckIndex;
+      damageInput.value = picked ? (picked.damage / YI).toFixed(2) : '';
+      if (!options.length) return;
+      deckBox.append(teamPicker(options, picked!.deckIndex, '實際使用隊伍', (candidate) => {
+        pickedDeck = candidate.deckIndex;
+        damageInput.value = (candidate.damage / YI).toFixed(2);
+      }));
     };
     const updateMembers = (): void => {
       memberSelect.replaceChildren();
@@ -298,31 +356,24 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
       }
       updateDecks();
     };
-    const updatePreview = (): void => {
-      preview.replaceChildren();
-      const picked = candidatesForSelection().find((candidate) => candidate.deckIndex === Number(deckSelect.value));
-      if (picked) {
-        damageInput.value = (picked.damage / YI).toFixed(2);
-        preview.append(squadPreview([picked.squad], deps.imageOf, deps.labelOf));
-      }
-    };
     bossSelect.addEventListener('change', updateMembers);
     memberSelect.addEventListener('change', updateDecks);
-    deckSelect.addEventListener('change', updatePreview);
     updateMembers();
 
     const confirm = el('button', 'roster-import union-run', '確認這一刀並重算');
     confirm.type = 'button';
     confirm.addEventListener('click', () => {
-      const picked = candidatesForSelection().find((candidate) => candidate.deckIndex === Number(deckSelect.value));
+      const picked = candidatesForSelection().find((candidate) => candidate.deckIndex === pickedDeck);
       if (picked) recordShot(picked, now, Number(damageInput.value));
       else status.textContent = '這位成員在這隻王沒有可用隊伍。';
     });
     controls.append(
-      labeled('Boss', bossSelect), labeled('出刀成員', memberSelect), labeled('實際隊伍', deckSelect),
+      labeled('Boss', bossSelect), labeled('出刀成員', memberSelect),
       labeled('實際傷害（億）', damageInput), confirm,
     );
-    card.append(controls, preview);
+    const teamField = el('div', 'live-recorder-field live-recorder-team-field');
+    teamField.append(el('span', undefined, '實際隊伍（點頭像選擇）'), deckBox);
+    card.append(controls, teamField);
     recorderBox.append(card);
   }
 
@@ -381,7 +432,7 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
     const row = el('div', 'live-shot-row is-done');
     row.append(el('span', 'live-shot-order', String(order)));
     row.append(el('span', 'live-shot-member', shot.memberName));
-    row.append(squadPreview([shot.squad], deps.imageOf, deps.labelOf));
+    row.append(teamBadge(shot));
     row.append(el('span', 'live-shot-damage', yi(shot.damage)));
     row.append(el('span', 'live-shot-remain', `剩 ${yi(remainingAfter)}`));
     const undo = el('button', 'roster-import live-undo', '撤銷此刀');
@@ -406,32 +457,37 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
     const options = remainingCandidates(base!.candidates, fired)
       .filter((c) => c.memberId === shot.memberId && c.bossIndex === shot.bossIndex);
     const preview = el('span', 'live-shot-preview');
-    const deckSelect = el('select', 'live-deck-select');
-    deckSelect.ariaLabel = `${shot.memberName} 實際隊伍`;
-    for (const option of options) {
-      const opt = document.createElement('option');
-      opt.value = String(option.deckIndex);
-      opt.textContent = `B${option.bossIndex + 1}-T${option.deckIndex + 1}`;
-      if (option.deckIndex === shot.deckIndex) opt.selected = true;
-      deckSelect.append(opt);
-    }
     const damageInput = el('input', 'live-damage-input');
     damageInput.type = 'number'; damageInput.min = '0.01'; damageInput.step = '0.01';
     damageInput.ariaLabel = `${shot.memberName} 實際傷害（億）`;
+    let pickedDeck = options.some((o) => o.deckIndex === shot.deckIndex) ? shot.deckIndex : options[0]?.deckIndex;
 
     const drawPreview = (): void => {
       preview.replaceChildren();
-      const picked = options.find((o) => String(o.deckIndex) === deckSelect.value);
-      if (picked) preview.append(squadPreview([picked.squad], deps.imageOf, deps.labelOf));
+      const picked = options.find((o) => o.deckIndex === pickedDeck);
+      if (picked) preview.append(teamBadge(picked, `預估 ${yi(picked.damage)}`));
       damageInput.value = picked ? (picked.damage / YI).toFixed(2) : '';
     };
     drawPreview();
-    deckSelect.addEventListener('change', drawPreview);
+
+    // 大多數人照建議出刀，所以預設只顯示建議的那一隊；真的換隊才展開頭像清單。
+    let swap: HTMLElement | undefined;
+    if (options.length > 1) {
+      const fold = el('details', 'live-team-swap');
+      fold.append(el('summary', undefined, '換隊伍'));
+      fold.append(teamPicker(options, pickedDeck ?? -1, `${shot.memberName} 實際隊伍`, (candidate) => {
+        pickedDeck = candidate.deckIndex;
+        drawPreview();
+        fold.open = false;
+      }));
+      swap = fold;
+    }
 
     const confirm = el('button', 'roster-import', '確認並重算');
     confirm.type = 'button';
     confirm.addEventListener('click', () => {
-      const picked = findCandidate(base!.candidates, shot.memberId, shot.bossIndex, Number(deckSelect.value));
+      const picked = pickedDeck === undefined ? undefined
+        : findCandidate(base!.candidates, shot.memberId, shot.bossIndex, pickedDeck);
       const damage = Number(damageInput.value);
       if (!picked || !Number.isFinite(damage) || damage <= 0) {
         status.textContent = '請選擇實際隊伍並填入大於 0 的傷害。';
@@ -440,7 +496,8 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
       recordShot(picked, shot.phase, damage);
     });
 
-    row.append(preview, deckSelect, damageInput, confirm);
+    row.append(preview, damageInput, confirm);
+    if (swap) row.append(swap);
     return row;
   }
 
