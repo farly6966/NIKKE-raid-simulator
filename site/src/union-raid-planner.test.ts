@@ -1,7 +1,8 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import loadHighs, { type Highs } from 'highs';
+import type { JobResult } from './union-raid';
 import {
-  RAID_DAMAGE_SCALE, memberAttackCapacity, optimizeRaidPlan, type MilpSolution,
+  RAID_DAMAGE_SCALE, memberAttackCapacity, optimizeRaidPlan, plannerCandidates, type MilpSolution,
   type RaidPlannerCandidate,
 } from './union-raid-planner';
 
@@ -18,6 +19,20 @@ const candidate = (id: number, member: number, boss: number, team: number, damag
 const solve = (model: string): MilpSolution => highs.solve(model, { output_flag: false, time_limit: 10 });
 
 describe('global staged union raid planner', () => {
+  it('exports the team name with each candidate when the deck has one', () => {
+    const job = (deckIndex: number, deckLabel?: string) => ({
+      member: { openid: 'o1', name: 'A', synchro: 700 }, bossIndex: 0, bossName: 'B1', deckIndex,
+      ...(deckLabel ? { deckLabel } : {}), squad: ['a', 'b', 'c', 'd', 'e'].map(n => `${n}${deckIndex}`),
+    });
+    const rows = [
+      { job: job(0, '紅蓮速攻'), damage: 1 },
+      { job: job(1), damage: 1 },
+    ] as unknown as JobResult[];
+    const [named, plain] = plannerCandidates(rows);
+    expect(named!.deckLabel).toBe('紅蓮速攻');
+    expect(plain).not.toHaveProperty('deckLabel');
+  });
+
   it('counts zero to three usable attacks from actual conflict-free candidates', () => {
     const a = candidate(0, 0, 0, 0);
     const b = candidate(1, 0, 1, 1);

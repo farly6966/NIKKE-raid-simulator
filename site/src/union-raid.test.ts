@@ -5,7 +5,7 @@ import {
   groupResults, humanSeconds,
   DIRECT_SNIPPET, MEMBER_SNIPPET, parseDirectScan, parseMemberList, readBossCode, readDeckCode,
   readUnionCode, remainingSeconds, unionCodeOf, unionShareOf, encodeUnionDraft, decodeUnionDraft,
-  DECK_SLOTS,
+  DECK_SLOTS, cleanDeckLabel, DECK_LABEL_MAX,
 } from './union-raid';
 import type { BossSlot, JobResult, MemberRow } from './union-raid';
 import { encodeBattleCode, encodeShareCode } from './share-code';
@@ -209,6 +209,16 @@ describe('돌릴 것 늘어놓기', () => {
     expect(boss.battle).toEqual(battle);
   });
 
+  it('carries the optional team name into each job', () => {
+    const boss = bossWith({ decks: [
+      { code: 'a', squad: ['리타'], label: '  紅蓮速攻 ' },
+      { code: 'b', squad: ['라피'] },
+    ] });
+    const jobs = buildJobs([member()], [boss]);
+    expect(jobs[0]!.deckLabel).toBe('紅蓮速攻');
+    expect(jobs[1]).not.toHaveProperty('deckLabel');
+  });
+
   it('체크 해제한 보스는 아예 돌리지 않는다', () => {
     const jobs = buildJobs([member()], [bossWith({ name: '켠 보스' }), bossWith({ name: '끈 보스', enabled: false })]);
     expect(jobs.map((job) => job.bossName)).toEqual(['켠 보스']);
@@ -258,6 +268,23 @@ describe('local union board draft', () => {
     Object.assign(bosses[0]!.decks[0]!, { account: 'SECRET' });
     const saved = encodeUnionDraft(bosses);
     expect(saved).not.toMatch(/SECRET|cookie|roster|account/);
+  });
+
+  it('keeps team names in the saved draft but not in the result-invalidation key', () => {
+    const bosses = draft();
+    bosses[0]!.decks[0]!.label = '紅蓮速攻';
+    expect(decodeUnionDraft(encodeUnionDraft(bosses), ['리타'])[0]!.decks[0]!.label).toBe('紅蓮速攻');
+    const renamed = draft();
+    renamed[0]!.decks[0]!.label = '別的名字';
+    expect(encodeUnionDraft(renamed, false)).toBe(encodeUnionDraft(bosses, false));
+    expect(unionCodeOf(bosses)).toBe(unionCodeOf(draft()));
+  });
+
+  it('cleans team names: trims, collapses whitespace, caps length, drops empties', () => {
+    expect(cleanDeckLabel('  紅蓮\n 速攻  ')).toBe('紅蓮 速攻');
+    expect(cleanDeckLabel('   ')).toBeUndefined();
+    expect(cleanDeckLabel(42)).toBeUndefined();
+    expect([...cleanDeckLabel('隊'.repeat(40))!]).toHaveLength(DECK_LABEL_MAX);
   });
 
   it('still decodes a legacy sixth slot for recovery, but shared active boards have five slots', () => {

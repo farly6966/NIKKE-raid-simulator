@@ -18,6 +18,8 @@ export interface FiredShot {
   bossName: string;
   phase: number;
   deckIndex: number;
+  /** 隊伍自訂名稱（匯出檔有帶才有）。 */
+  deckLabel?: string;
   squad: string[];
   damage: number;
 }
