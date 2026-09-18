@@ -461,7 +461,7 @@ python calculator/damage.py
 | `full_charge_count:N` | ✅ | 이전 데이터 호환 별칭. `full_charge_fire_count:N`과 동일하게 처리 |
 | `core_hit` | ✅ | `bm.notify("core_hit", ...)`. 코어 크기·명중률에 따른 실제/기대 코어 명중 이벤트 |
 | `core_hit_count:1` | ✅ | `bm.notify("core_hit", ...)` (횟수 없는 형태, `timing == event`로 처리) |
-| `core_hit_count:N` | ✅ | `bm.notify("core_hit", ...)`. `trigger_count_reduce` 버프로 N 감소 가능 |
+| `core_hit_count:N` | ✅ | `bm.notify("core_hit", ...)`. `trigger_count_reduce` 버프로 N 감소 가능. **2026-09-19 이전에는 이 ✅가 거짓이었다** — `_timing_to_index_key()`는 `core_hit_count:`·`core_hit:` 둘 다 `core_hit`로 접는데 `_timing_match()`에는 `core_hit:` 분기뿐이라, 파싱 정본 표기인 이쪽을 쓰는 효과가 **영구 미발동**이었다(루드밀라 : 윈터 오너 `눈보라`, 길로틴 : 윈터 슬레이어 `경험치`). 코어 이벤트 자체는 정상이라 로그만 봐서는 드러나지 않는다 |
 | `pellet_hit_count:N` | ✅ | `bm.notify("pellet_hit", ...)`. `trigger_count_reduce` 버프로 N 감소 가능 |
 | `last_bullet` | ✅ | `bm.notify("last_bullet", ...)` |
 | `last_bullet_fire` | ✅ | `bm.notify("last_bullet_fire", ...)` |
@@ -549,11 +549,12 @@ python calculator/damage.py
 | `gauge_below:게이지명:N` | 양쪽 모두 | ✅ | `state["gauges"][caster][gauge_id]` |
 | `gauge_eq:게이지명:N` | 양쪽 모두 | ✅ | `state["gauges"][caster][gauge_id]` |
 | `has_burst1_ally` | `_condition_ok` 전용 | ✅ | `state["burst_stages"]` |
-| `no_defender_ally` | `_condition_ok` 전용 | ❌ | 미구현. 분기 없음 |
-| `has_defender_ally` | `_condition_ok` 전용 | ❌ | 미구현. 분기 없음 |
+| `no_defender_ally` | `_condition_ok` 전용 | ✅ | 자신 제외 스쿼드의 `parsed_nikke["class"] == "방어형"` 여부. `has_defender_ally`와 **한 분기에서 함께** 판정한다 — 같은 원문의 배타 분기라 한쪽만 구현하면 나머지가 무조건 통과해 양쪽이 동시에 성립한다(델타 : 닌자 시프 `인법 카모플라쥬`가 전투 시작에 네 효과를 다 받던 자리). 스쿼드 구성은 전투 중 안 바뀌므로 `_RUNTIME_COND_PREFIXES` 대상이 아니다 |
+| `has_defender_ally` | `_condition_ok` 전용 | ✅ | 위와 같은 분기 |
 | `no_burst1_ally` | `_condition_ok` 전용 | ✅ | `state["burst_stages"]` |
 | `enemy_count_below:N` | 양쪽 모두 | ✅ | 랩쳐/적 N기 이하. 단일 보스 count=1 → 1<=N 항상 True. 마르차나 : 마린 스터디 |
 | `enemy_count_above:N` | 양쪽 모두 | ✅ | 랩쳐/적 N기 이상. 단일 보스 count=1 → N>=2면 False, 무발동. **`_RUNTIME_COND_PREFIXES`에도 등록**(2026-08-08) — `passive` 버프는 조건 미충족이어도 등록된 뒤 게이팅을 runtime 재평가에만 의존하므로, 여기 없으면 보스전에서 그대로 적용된다(맥스웰 `일렉트릭 샷`). 마르차나 : 마린 스터디, 맥스웰 |
+| `optimal_range` | `_condition_ok` 전용 | ✅ | 시전자가 **적정 사거리**에서 쏘는가. 정본은 `enemy["optimal_range_weapons"]`로, ③ 고정 +30%를 태우는 것과 같은 목록이다. 기본값이 빈 목록이라 **스쿼드 스펙이 무기군을 명시하지 않으면 무발동**이다. 무기군은 `parsed_nikke["weapon_type"]`(로스터 값)을 보므로 무기 변경 모드는 반영하지 않는다 — ③ 쪽은 라이브 `weapon_type`을 보므로 모드 중 무기군이 바뀌면 그쪽만 따라간다(스노우 화이트 `세븐스 드워프 : I`). 에이드 : 에이전트 바니 `요원의 시선`·`요원의 움직임` |
 | `core_hit` | `_condition_ok` 전용 | ✅ | 대상이 코어 보유 적일 때. **`enemy["core_px"] >= 1` 기준**(0이면 코어 없음). 기본공격의 코어히트는 명중률·탄착군 확률이지만 이 condition이 붙은 효과는 "코어가 활성화된 적" 대상의 **확정 발동**이다 — 확률 판정을 걸지 않는다. 기본값 `core_px = 0`이므로 코어 없는 보스에서는 정상적으로 무발동. 리버렐리오 `차분한 수심 2`, 신데렐라 : 크리스탈 웨이브 `모드 스왑 3` |
 | `gauge_mod:게이지명:mod:나머지` | `_condition_ok` 전용 | ✅ | 게이지값 `% mod == 나머지`일 때 발동. 민트, 아르카나 : 포츈 메이트 |
 | `trigger_hit_crit` | `_condition_ok` 전용 | ✅ | 트리거를 발생시킨 히트가 **실제 크리티컬 롤에 성공**했는가. named damage 명중(`hit_count:[이름]:N`)과 짝으로 쓴다. `prob:` 확률 근사가 아니라 그 히트의 롤 결과를 그대로 읽는다 — 근사로 대체하면 원래 딜과 상관관계가 끊긴다(유저 결정, 2026-08-17). 율리아 `마르카토 2` |
@@ -605,7 +606,8 @@ lazy resolve: 버프 반영 스탯 기준 정렬 필요 target → `_activate()`
 | `"allies_weapon_excl_self:SG"` | ❌ | ✅ | 자신 제외 샷건 소지 아군 전체. `_resolve_target()`에 `allies_weapon_excl_self:` 분기 추가. `allies_weapon:SG`와 별도 |
 | `"allies_weapon_top_atk:무기유형:N"` | ✅ | ✅ | 해당 무기 소지 아군 중 **최종 공격력 최고 N기**. `allies_weapon:X` ∩ `allies_top_atk:N`. 공격력 정렬이므로 `_LAZY_RESOLVE_PREFIXES` 등록 필수. 시전자 포함(자신 제외 표기 없음). 매칭 아군이 N보다 적으면 있는 만큼. 레오나 `용기있는 시선 2`(`SG:2`) |
 | `"allies_class:클래스"` | ❌ | ✅ | 파싱 키 `공격`·`방어`·`지원`을 로스터 값 `화력형`·`방어형`·`지원형`으로 정규화해 `parsed_nikke["class"]`와 비교 |
-| `"allies_code:코드"` | ❌ | ✅ | `parsed_nikke["element_code"]` 기준 |
+| `"allies_code:코드"` | ❌ | ✅ | `parsed_nikke["element_code"]` 기준. **시전자를 포함한다** |
+| `"allies_code_excl_self:코드"` | ❌ | ✅ | 위의 자신 제외판. 원문 `자신을 제외한 [코드] 아군 전체`. 포함판으로 적으면 아군판과 자기판이 **배타 분기**인 효과에서 시전자가 양쪽을 다 받는다(메이든 : 아이스 로즈 `블레스 유`가 그 자리였다) |
 | `"allies_code_weapon:코드:무기유형"` | ❌ | ✅ | 코드+무기 복합 조건 아군 전체. `_code_weapon()` 헬퍼가 `element_code`·`weapon_type` 동시 필터. 트리나(`전격:AR`) |
 | `"allies_code_weapon_leftmost:코드:무기유형:N"` | ❌ | ✅ | 위 조건을 만족하는 아군 중 **스쿼드 입력 순서 앞 N명**. 고정 속성 기반이라 lazy resolve 불필요. 매칭 0명이면 빈 리스트. 트리나(`전격:AR:1`) |
 | `"allies_below_def"` | ✅ | ✅ | `_LAZY_RESOLVE_PREFIXES` 등록됨. 시전자보다 방어력 낮은 아군 전체 |
@@ -639,6 +641,23 @@ lazy resolve: 버프 반영 스탯 기준 정렬 필요 target → `_activate()`
 | `"allies_lowest_cover_hp:N"` | ❌ | ❌ | 엄폐물 체력 수치 기준 정렬. 엄폐 모델 없음. 빈 리스트 반환 |
 | `"same_target:[name]"` | ❌ | ❌ | 연계 대상 명시 형태. 미구현 |
 | `"allies_lowest_atk_burst3:N"` 형 확장 | ✅ | — | 새 스탯 비교 기반 target 추가 시 `_LAZY_RESOLVE_PREFIXES`에 등록 필수 |
+
+---
+
+## scaling 마스터 테이블
+
+`scaling`은 stat도 timing도 아니라 **어느 마스터 테이블에도 안 잡히는 축**이다. 그래서
+`context/doclint.py`가 미등록을 세어 주지 못한다 — 규격만 `context/PARSING.md` §scaling에
+있고 엔진이 읽는 곳이 없어도 조용히 지나간다. 실제로 `max_hp_additive`가 그 상태로
+남아 있었다. 여기에 로스터를 적어 두는 이유다.
+
+| scaling | 읽는 곳 | 구현 | 비고 |
+|---------|--------|------|------|
+| `max_hp` | `simulate()` 안 `_handle_damage_eff()` 계수 블록 | ✅ | 최대 체력 비례 |
+| `stack_count` | `simulate()` 안 `_handle_damage_eff()` 계수·히트 수 | ✅ | `scaling_ref` 게이지/스택 수 비례. damage stat이면 히트 수로도 쓰인다(`dot_damage` 제외 — 계수에서 이미 곱했다) |
+| `max_hp_additive` | `simulate()` 안 `_handle_damage_eff()`의 히트 조립 | ✅ | 시전자의 **최종 최대 체력 N%**(`scaling_hp_pct`)를 공격력에 더한 뒤 계산. 버프가 아니라 그 히트에만 얹는 항이라 `buffs` 사본의 `atk_flat`에 넣는다(`atk_from_hp_pct`와 같은 자리). **2026-09-19까지 읽는 곳이 없었다** — 유일한 사용처인 메이든 : 아이스 로즈 `다이아몬드 더스트`가 최대 체력 10%를 통째로 빠뜨린 채 계산됐다(이 캐릭터에선 그 10%가 공격력보다 크다) |
+| `max_hp_conversion` | `simulate()` 안 `_handle_damage_eff()`의 `damage_base_atk` | ✅ | 최종 최대 체력 N%를 **공격력으로 환산**하며 공격력·공격력 버프를 전부 무시한다(`atk_pct`·`atk_flat`을 0으로 덮는다). `max_hp_additive`와 달리 더하는 게 아니라 **대체**한다. 킬로 `우선 순위 지정`(5%) |
+| `lost_hp_pct` | `simulate()` 안 `_handle_damage_eff()` 계수 블록 | ✅ | 잃은 체력 % 비례 |
 
 ---
 
