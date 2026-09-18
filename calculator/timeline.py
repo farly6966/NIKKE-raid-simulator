@@ -2613,7 +2613,13 @@ def _register_instant_handlers(bm, char_states: dict[str, "CharState"], burst_ct
                 continue
             max_ammo = _effective_max_ammo(cs, t)
             charge = round(max_ammo * (val / 100.0))
-            cs.ammo = min(cs.ammo + charge, max_ammo)
+            # 負值（「彈藥 100% 移除」）會掉到 0 以下 —— 扣的是**最大裝彈**的比例，
+            # 不是彈匣裡**現有**的彈。半滿的彈匣吃到 -100% 就變負數，之後的裝填
+            # 得先從負的爬回 0，等於白白多花好幾次。彈匣沒有負數這回事。
+            # 影響：그레이브「방열」· 라플라스 : 얼티밋 히어로「일렉트릭 파워 풀 풀 차지 5」·
+            # 밀크 : 블루밍 바니「부끄러움 3」· 질「슈퍼 캅 2」· 드레이크 : 그레이트 빌런
+            # 「오버 오버 드라이브 2」——五個都是 -100。
+            cs.ammo = max(0, min(cs.ammo + charge, max_ammo))
             if cs._sim_log is not None:
                 cs._sim_log.ammo_log.append(AmmoLogEntry(t=t, caster=name, ammo=cs.ammo))
             _cancel_reload_if_full(cs, t, max_ammo)
