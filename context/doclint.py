@@ -67,6 +67,10 @@ STATUS_EXEMPT: dict[str, str] = {
     "effect_interval": "`_dispatch_instant()` 내부에서 `target_effect`와 함께 처리. "
                        "stat 문자열을 직접 조회하지 않는다",
     "gauge_charge_enabled": "buff로 등록만 되고 게이지 로직이 `gauge_id`로 동작한다",
+    "allies_down_top_atk_excl": "코드의 흔적은 `calculator/test_raw_text_audit.py`가 "
+                                "「자신을 제외한」 계열 target **이름**을 나열한 것뿐이다. "
+                                "구현이 아니라 명명 규칙 목록이라 ❌가 맞다 "
+                                "(전투불능 모델이 없어 기본 경로가 빈 리스트를 돌려준다)",
     "auto_damage": "파서 단계에서 `is_normal_atk`/`damage_formula`로 번역된다. "
                    "계산기는 원래 stat 이름을 보지 않는다",
     "event": "`timing == event` 표기용 일반 명사라 코드 전역에 등장한다. 텍스트 대조 불가",

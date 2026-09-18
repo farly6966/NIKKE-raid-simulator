@@ -3912,7 +3912,7 @@
         "condition": []
       },
       "target": "self",
-      "stat": "def_caster_based_pct",
+      "stat": "def_pct",
       "polarity": "beneficial",
       "max_stack": 1,
       "values": {
@@ -8540,6 +8540,22 @@
     },
     {
       "source": "스킬2",
+      "type": "buff",
+      "name": "첫차 할인",
+      "trigger": {
+        "timing": [
+          "battle_start"
+        ],
+        "condition": []
+      },
+      "target": "all_allies",
+      "polarity": "neutral",
+      "max_stack": 1,
+      "duration": 6,
+      "note": "상태 마커. 원문 `[첫차 할인] [6초 유지] / 기능 : 열차 탑승 도와줄게!의 효과로 인한 티켓을 소모하지 않습니다.`는 수치 없이 이름만 있는 상태다. 종전에는 이 항목 자체가 없어서 스킬1의 `첫차 할인 해제`(remove_named_buff)가 **없는 것을 지우고** 있었고, 티켓 소모 면제도 통째로 빠져 있었다. instant로 두면 `_active`에 안 들어가 둘 다 조용히 죽는다(그레이브 `미래 예지`와 같은 자리)"
+    },
+    {
+      "source": "스킬2",
       "type": "instant",
       "name": "열차 탑승 도와줄게!",
       "trigger": {
@@ -8575,7 +8591,8 @@
           "event:ally_hp_below:15"
         ],
         "condition": [
-          "gauge_above:티켓:1"
+          "gauge_above:티켓:1",
+          "not_self_state:첫차 할인"
         ]
       },
       "target": "all_allies",
