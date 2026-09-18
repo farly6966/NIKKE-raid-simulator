@@ -533,6 +533,9 @@ class CharState:
         # 생산자가 정책(기본 전략)이든 명시 시퀀스든 실행층은 구분하지 않는다.
         self._cover_until: float = -1.0         # >0이면 엄폐 중 (해제 예정 시각)
         self._cover_until_reload: bool = False  # 재장전이 끝날 때까지 엄폐 (duration 미지정)
+        # 有限掩體在彈匣 0 的狀態下結束時，等下一個彈夾進來的那一刻再把裝填切掉。
+        # 0 發就地取消沒有意義 —— 自動裝填會立刻再掛上，這個操作等於沒表現出來。
+        self._reload_cancel_after_clip: bool = False
         # 명시 시퀀스 — 정책으로 표현 못 하는 조작을 시각으로 직접 적는 통로.
         #   [{"t": 45.0, "action": "cover", "duration": 1.5},
         #    {"t": 60.0, "action": "hold",  "until": 62.5}]
@@ -646,6 +649,11 @@ class CharState:
         self._apply_hold_policy(t, bm)
         if self._pump_ctrl_seq(t, bm) or self._apply_cover_policy(t, bm):
             return []
+
+        # 有限掩體在**指定時刻**結束，跟裝填跑完了沒有無關。這一句必須在下面的裝填
+        # 完成檢查**之前** —— 那個檢查在裝填進行中就 `return` 了，掩體到期會被壓到
+        # 裝填結束之後才處理，等於這個操作不存在。
+        self._expire_timed_cover(t, bm)
 
         # 재장전 완료 체크 (엄폐 중에도 재장전은 그대로 굴러간다)
         if self.reloading_until > 0:
@@ -1558,17 +1566,34 @@ class CharState:
     # 정책(기본 전략)과 명시 시퀀스는 이 구간을 만드는 생산자일 뿐, 실행층은 둘을 구분하지 않는다.
 
     def _tick_cover(self, t: float) -> bool:
-        """엄폐 구간의 만료를 처리하고 '지금 엄폐 중인가'를 반환."""
+        """엄폐 구간의 만료를 처리하고 '지금 엄폐 중인가'를 반환.
+
+        유한 엄폐의 만료는 `_expire_timed_cover`가 이미 처리했다 — 여기 남은 건
+        duration 미지정(재장전 완료까지) 엄폐와 '아직 엄폐 중인가'의 판정뿐이다.
+        """
         if self._cover_until_reload:
             if self.reloading_until > 0:
                 return True
             self._exit_cover(t)   # duration 미지정 = 재장전이 끝나는 순간 이탈
             return False
-        if self._cover_until > 0:
-            if t < self._cover_until:
-                return True
-            self._exit_cover(t)
-        return False
+        return self._cover_until > 0 and t < self._cover_until
+
+    def _expire_timed_cover(self, t: float, bm: BuffManager) -> None:
+        """有限掩體到期 —— 連同進行中的裝填一起收掉。
+
+        掩體是**指定時刻**結束的，裝填跑完了沒有不影響它。還有彈就當場把裝填切掉
+        直接回去射擊；彈匣是空的就沒得射，等下一個彈夾進來再切（`_finish_reload`
+        的彈夾分支）。duration 未指定的掩體本來就撐到裝滿，不走這條路。
+        """
+        if self._cover_until <= 0 or t < self._cover_until:
+            return
+        self._exit_cover(t)
+        if self.reloading_until <= 0:
+            return
+        if self.ammo > 0:
+            self._cancel_reload(t, bm, "재장전 취소(엄폐 해제)")
+        else:
+            self._reload_cancel_after_clip = True
 
     def _enter_cover(self, t: float, bm: BuffManager, duration: float | None, label: str):
         """엄폐 진입 — 사격·차징을 멈추고, 탄이 덜 찼으면 재장전을 건다.
@@ -1582,6 +1607,7 @@ class CharState:
         else:
             self._cover_until_reload = False
             self._cover_until = t + float(duration)
+        self._reload_cancel_after_clip = False
         # 엄폐하면 들고 있던 차지는 무효다 (재장전이 걸리지 않는 경우에도 마찬가지)
         if self.fire_mode == "charge":
             self._charge_phase = "ready"
@@ -1873,7 +1899,8 @@ class CharState:
         if self._sim_log is not None:
             self._sim_log.reload_log.append(ReloadLogEntry(t=t, caster=self.name, event=label))
 
-    def _cancel_reload(self, t: float, bm: BuffManager):
+    def _cancel_reload(self, t: float, bm: BuffManager,
+                       label: str = "재장전 취소(탄충)"):
         """진행 중인 재장전을 **완료시키지 않고** 끊는다 (탄충 취소 컨트롤).
 
         `_finish_reload`와 반드시 달라야 하는 것이 둘 있다.
@@ -1884,9 +1911,10 @@ class CharState:
         """
         self.reloading_until = -1.0
         self._reload_in_weapon_change = False
+        self._reload_cancel_after_clip = False
         if self._sim_log is not None:
             self._sim_log.reload_log.append(
-                ReloadLogEntry(t=t, caster=self.name, event="재장전 취소(탄충)"))
+                ReloadLogEntry(t=t, caster=self.name, event=label))
 
     def _full_ammo(self, bm: BuffManager, t: float) -> int:
         # 무기 변경 모드 중이면 그 모드의 장탄으로 채운다. 다만 스킬 원문에
@@ -1946,7 +1974,8 @@ class CharState:
         재장전 완료 시"이므로 최대 장탄에 도달한 마지막 클립만 완료로 센다 (유저 확인,
         2026-08-19). 이어 붙이는 동안 `reloading_until`이 계속 >0이라 사격은 그대로 막힌다
         — 오토는 3연속으로 끝까지 굴린다. 엄폐를 끊어 1/3·2/3만 채우고 나오는 컨트롤은
-        아직 표현하지 않는다.
+        `_reload_cancel_after_clip`이 표현한다 — 유한 엄폐가 빈 탄창인 채 끝났을 때
+        다음 클립 하나만 받고 이어 붙이기를 그만둔다.
         """
         # 裝填完成是重新量測實效彈藥的兩個事件之一（GAMEPLAY §무기 메카닉）。
         self._wc_ammo_full = None
@@ -1956,12 +1985,19 @@ class CharState:
             if self.ammo < full:
                 if self._sim_log is not None:
                     self._sim_log.ammo_log.append(AmmoLogEntry(t=t, caster=self.name, ammo=self.ammo))
+                # 掩體在彈匣 0 的時候結束了 —— 這一個彈夾進來就夠射擊，不再接下一個。
+                # 這就是 1/3·2/3 出掩體的操作。
+                if self._reload_cancel_after_clip:
+                    self._cancel_reload(t, bm, "재장전 취소(엄폐 해제)")
+                    self.next_fire_time = max(self.next_fire_time, t)
+                    return
                 self._start_reload(t, bm, "클립 재장전")
                 return
         else:
             self.ammo = full
         self.reloading_until = -1.0
         self._reload_in_weapon_change = False
+        self._reload_cancel_after_clip = False
         bm.notify("event:full_reload", t, self.name)
         if self._sim_log is not None:
             self._sim_log.reload_log.append(ReloadLogEntry(t=t, caster=self.name, event="재장전 완료"))
