@@ -111,5 +111,142 @@ class ControlModeTest(unittest.TestCase):
             _run("nope")
 
 
+
+class PriorityDefaultsTest(unittest.TestCase):
+    """등급 기본값은 **요청 종류**에서 나온다. 정본: context/CONTROL.md §조작자는 한 명."""
+
+    @staticmethod
+    def _cs(name, control):
+        char = build_squad([name], chars={name: {"control": control}},
+                           no_layer={name})[0]
+        return TL.CharState(char, 100000.0, "")
+
+    def test_reload_policy_c_is_high_others_low(self):
+        """C만 상이다 — 놓치면 그 사이클의 버충이 통째로 날아간다."""
+        c = self._cs("라피 : 레드 후드", {"reload": {"policy": "finish_by_fb_end"}})
+        a = self._cs("라피 : 레드 후드", {"reload": {"policy": "before_fb_end"}})
+        b = self._cs("라피 : 레드 후드", {"reload": {"policy": "into_fb"}})
+        self.assertEqual(TL._PRIO_HIGH, c.reload_priority)
+        self.assertEqual(TL._PRIO_LOW, a.reload_priority)
+        self.assertEqual(TL._PRIO_LOW, b.reload_priority)
+
+    def test_cover_is_mid(self):
+        cs = self._cs("라피 : 레드 후드", {"cover": {"policy": "own_full_burst"}})
+        self.assertEqual(TL._PRIO_MID, cs.cover_priority)
+
+    def test_tap_grade_depends_on_its_purpose(self):
+        """**같은 톡톡이라도 목적이 다르면 등급이 다르다.**"""
+        always = self._cs("앨리스", {"tap_fire": {"rate": 3.6}})
+        charge = self._cs("앨리스", {"tap_fire": {"rate": 3.6, "window": "burst_charge"}})
+        hold = self._cs("앨리스", {"hold": {"policy": "own_full_burst"}})
+        self.assertEqual(TL._PRIO_LOW, always._click_sched[0]["_prio"])
+        self.assertEqual(TL._PRIO_HIGH, charge._click_sched[0]["_prio"])
+        self.assertEqual(TL._PRIO_MID, hold._click_sched[0]["_prio"])
+
+    def test_element_overrides_character_overrides_default(self):
+        """요소 지정 → 캐릭터 단위 지정 → 종류 기본값."""
+        by_char = self._cs("라피 : 레드 후드",
+                           {"priority": "high", "reload": {"policy": "before_fb_end"}})
+        self.assertEqual(TL._PRIO_HIGH, by_char.reload_priority)
+        by_el = self._cs("라피 : 레드 후드",
+                         {"priority": "high",
+                          "reload": {"policy": "before_fb_end", "priority": "low"}})
+        self.assertEqual(TL._PRIO_LOW, by_el.reload_priority)
+
+    def test_unknown_alias_is_rejected(self):
+        with self.assertRaises(ValueError) as cm:
+            self._cs("라피 : 레드 후드", {"reload": {"policy": "into_fb", "priority": "urgent"}})
+        self.assertIn("모르는 컨트롤 등급", str(cm.exception))
+
+
+class _FakeBM:
+    def __init__(self, state):
+        self.state = state
+
+
+class ArbitrationRuleTest(unittest.TestCase):
+    """조율 규칙 자체 — **등급 > 에지(후입) > 스쿼드 자리**.
+
+    baseline 편성에서는 두 조작이 같은 등급(하)이라 등급이 갈리는 자리가 나오지 않는다.
+    규칙을 직접 세운다: `_wants_control()`을 고정값으로 바꿔 끼우고 조율만 돌린다.
+    """
+
+    def _setup(self, reqs):
+        """reqs: [(이름, (종류, 등급) | None, 직전에도 원했나)]"""
+        names = [n for n, _, _ in reqs]
+        chars = build_squad(names)
+        css = {}
+        for (name, req, prev), char in zip(reqs, chars):
+            cs = TL.CharState(char, 100000.0, "")
+            cs._wants_control = lambda t, bm, _r=req: _r
+            cs._ctrl_want_prev = prev
+            css[name] = cs
+        state = {"ctrl_mode": "solo", "ctrl_owner": "", "ctrl_preempt": {}}
+        return chars, css, state
+
+    def _arbitrate(self, reqs, owner=""):
+        chars, css, state = self._setup(reqs)
+        state["ctrl_owner"] = owner
+        TL._arbitrate_control(1.0, _FakeBM(state), chars, css, frozenset())
+        return state
+
+    def test_high_owner_is_not_preempted_by_a_low_new_request(self):
+        """낮은 등급은 **새 요청이어도** 뺏지 못한다.
+
+        이게 없으면 전투 내내 클릭을 잡는 상시 톡톡이가 「이 시각에 꼭 해야 하는」
+        조작을 밀어낸다.
+        """
+        state = self._arbitrate([
+            ("앨리스", ("장전컨", TL._PRIO_HIGH), True),
+            ("리타", ("클릭:tap", TL._PRIO_LOW), False),   # 새 요청
+        ], owner="앨리스")
+        self.assertEqual("앨리스", state["ctrl_owner"])
+        self.assertEqual({}, state["ctrl_preempt"])
+
+    def test_high_new_request_preempts_a_low_owner(self):
+        state = self._arbitrate([
+            ("앨리스", ("클릭:tap", TL._PRIO_LOW), True),
+            ("리타", ("장전컨", TL._PRIO_HIGH), False),
+        ], owner="앨리스")
+        self.assertEqual("리타", state["ctrl_owner"])
+        self.assertEqual({"앨리스": 1}, state["ctrl_preempt"])
+
+    def test_same_grade_goes_to_the_newer_request(self):
+        state = self._arbitrate([
+            ("앨리스", ("클릭:tap", TL._PRIO_LOW), True),
+            ("리타", ("장전컨", TL._PRIO_LOW), False),
+        ], owner="앨리스")
+        self.assertEqual("리타", state["ctrl_owner"])
+
+    def test_same_grade_without_an_edge_keeps_the_owner(self):
+        """계속 원하는 것은 새 요청이 아니다 — 채터링을 막는 그 규칙."""
+        state = self._arbitrate([
+            ("앨리스", ("클릭:tap", TL._PRIO_LOW), True),
+            ("리타", ("장전컨", TL._PRIO_LOW), True),
+        ], owner="앨리스")
+        self.assertEqual("앨리스", state["ctrl_owner"])
+
+    def test_sequence_outranks_everything(self):
+        state = self._arbitrate([
+            ("앨리스", ("장전컨", TL._PRIO_HIGH), True),
+            ("리타", ("시퀀스", TL._PRIO_SEQ), False),
+        ], owner="앨리스")
+        self.assertEqual("리타", state["ctrl_owner"])
+
+    def test_empty_camera_goes_to_the_most_urgent(self):
+        state = self._arbitrate([
+            ("앨리스", ("클릭:tap", TL._PRIO_LOW), False),
+            ("리타", ("장전컨", TL._PRIO_HIGH), False),
+        ], owner="")
+        self.assertEqual("리타", state["ctrl_owner"])
+
+    def test_owner_that_stops_wanting_releases_the_camera(self):
+        state = self._arbitrate([
+            ("앨리스", None, True),
+            ("리타", ("클릭:tap", TL._PRIO_LOW), True),
+        ], owner="앨리스")
+        self.assertEqual("리타", state["ctrl_owner"])
+
+
 if __name__ == "__main__":
     unittest.main()

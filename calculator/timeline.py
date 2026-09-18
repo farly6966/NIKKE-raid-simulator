@@ -138,10 +138,40 @@ _CLICK_PRESS_MODES = ("tap", "hold")          # 누름: 차지 시작 시점에 
 _CLICK_HOLD_MODES  = ("hold", "hold_judge")   # 떼기: 매 틱 평가
 # 항목이 쓸 수 있는 키 — **닫혀 있다.** 모르는 키가 살아남으면 오타가 조용히
 # "아무 일도 안 함"이 된다. `_timing`은 검증 뒤에 붙는 내부 키다.
-_CLICK_ENTRY_KEYS = ("window", "mode", "rate", "release", "full_charge_interval", "lead")
+_CLICK_ENTRY_KEYS = ("window", "mode", "rate", "release", "full_charge_interval",
+                     "lead", "priority")
 
 # 조작 모드 — 카메라가 하나뿐이라는 제약을 어떻게 다룰지. 정본: context/CONTROL.md §조작자는 한 명.
 _CTRL_MODES = ("solo", "warn", "strict")
+
+# 조작 등급 — 카메라 경합의 승자는 「나중에 요청해서」가 아니라 **「이게 더 급해서」**로
+# 갈린다. 등급은 **요청 단위**다: 기본값이 요청 종류에서 나오고, 캐릭터·요소 지정이
+# 덮어쓴다. 정본: context/CONTROL.md §조작자는 한 명.
+#
+#   상 30  놓치면 사이클이 밀린다 (되돌릴 수 없다)   — 버충 톡톡이 · 장전컨 C
+#   중 20  놓치면 그 순간부터 버프가 샌다             — 엄폐컨 · 홀드컨
+#   하 10  언제든 끊고 다시 재개할 수 있다             — 상시 톡톡이 · 장전컨 A·B
+_PRIO_HIGH, _PRIO_MID, _PRIO_LOW = 30, 20, 10
+_PRIO_ALIAS = {"high": _PRIO_HIGH, "mid": _PRIO_MID, "low": _PRIO_LOW}
+_PRIO_SEQ = 99      # 명시 시퀀스 — 유저가 시각을 콕 집었다. 등급 밖의 최우선
+
+
+def _parse_prio(val, default: int, who: str) -> int:
+    """등급 값을 정수로. `"high"`·`"mid"`·`"low"` 별칭과 정수를 함께 받는다.
+
+    오타가 조용히 기본 등급으로 떨어지면 지정한 줄 알고 결과를 읽게 된다 —
+    조립 시점에 끊는다.
+    """
+    if val is None:
+        return default
+    if isinstance(val, str):
+        if val not in _PRIO_ALIAS:
+            raise ValueError(
+                f"{who}: 모르는 컨트롤 등급 {val!r}. "
+                f"{' · '.join(_PRIO_ALIAS)} 또는 정수여야 한다. "
+                f"context/CONTROL.md §조작자는 한 명")
+        return _PRIO_ALIAS[val]
+    return int(val)
 
 # ── 기본 config / enemy ────────────────────────────────────────────────────
 
@@ -466,6 +496,12 @@ class CharState:
         self._tap_charge: float = 0.0   # 그중 실제로 차지되는 시간
         self._tap_release: float = 0.0
         self._tap_post: float = 0.0
+        # 캐릭터 단위 등급 — 요소가 따로 적지 않았을 때의 기본값이다. None이면 요청
+        # 종류별 기본 등급을 쓴다(`_prio_of()`).
+        self._ctrl_priority: int | None = (
+            None if control.get("priority") is None
+            else _parse_prio(control["priority"], 0, self.name))
+
         # 클릭 스케줄 — 종전 키를 여기로 접어 넣는다(`_desugar_click`). 이 아래의
         # `tap_*` 필드는 **이번 발에 걸린 항목**의 값으로 차지 시작 때마다 다시 채워진다.
         self._click_sched: list[dict] = self._build_click_sched(control)
@@ -511,6 +547,11 @@ class CharState:
         # 비버스트에 탄이 마를 때만 건다 (정책 A·C 전용). 남은 장탄으로 풀버스트 잔여
         # 구간 + 다음 비버스트 구간을 버틸 수 있으면 엄폐하지 않는다.
         self.reload_if_dry: bool = bool(rl.get("if_dry", False))
+        # 등급 — **정책 C만 상이다.** 목적이 「만탄으로 버스트 게이지 충전 창을 여는 것」이라
+        # 놓치면 그 사이클의 버충이 통째로 날아간다. A·B는 재장전을 유리한 구간에 밀어
+        # 넣는 것이라 놓쳐도 다음에 다시 하면 된다.
+        self.reload_priority: int = self._prio_of(
+            rl, _PRIO_HIGH if self.reload_policy == "finish_by_fb_end" else _PRIO_LOW)
         # 엄폐 지속 시간(초). None이면 재장전이 끝나는 순간까지만 엄폐한다
         self.reload_cover_dur: float | None = (
             None if rl.get("duration") is None else float(rl["duration"]))
@@ -527,6 +568,8 @@ class CharState:
         cv = control.get("cover") or {}
         self.cover_policy: str = cv.get("policy", "")
         self.cover_extend: float = float(cv.get("extend", 0.0))
+        # 등급 중 — 자리를 비우면 자동 사격이 재개돼 **그 순간부터 발수 소모 버프가 샌다.**
+        self.cover_priority: int = self._prio_of(cv, _PRIO_MID)
         self._cover_ctrl_anchor: float = -1.0
 
         # 홀드(차지 유지): 풀차지가 끝나도 떼지 않고 지정 시각까지 들고 있는다 (차지형 전용).
@@ -548,6 +591,9 @@ class CharState:
         self._ctrl_anchor_val: float = -1.0
         self._reentry_used: set = set()   # 되돌린 앵커 (앵커당 1회만)
         self._ctrl_want_prev: bool = False  # 직전 틱에도 원했나 (에지 = 새 요청)
+        # 지금 열려 있는 조작이 **어느 등급으로** 열렸나. 유지 요청은 연 정책의 등급을
+        # 물려받는다 — 열 때는 상이던 조작이 유지 중에 떨어지면 그대로 뺏긴다.
+        self._ctrl_open_prio: int = 0
 
         # `charge_hold:N` 판정용 상태 (밀크 : 블루밍 바니 부끄러움).
         # 풀차지 도달 후 N초를 넘긴 순간 1회만 발동한다 — 계속 들고 있어도 재판정하지 않는다.
@@ -1007,6 +1053,13 @@ class CharState:
                 raise ValueError(
                     f"{self.name}: click.mode=\"tap\"에는 rate가 필요하다. "
                     f"context/CONTROL.md §톡톡이")
+            # 등급 — **같은 톡톡이라도 목적이 다르면 등급이 다르다.** 충전 창 한정
+            # 톡톡이는 놓치면 사이클이 밀리는 조작이고(버충), 상시 톡톡이는 언제든 끊고
+            # 다시 하면 된다. 홀드는 엄폐컨과 목적이 같아 같은 등급이다.
+            e["_prio"] = self._prio_of(
+                e, _PRIO_MID if mode in ("hold", "hold_judge")
+                else _PRIO_HIGH if window == "burst_charge"
+                else _PRIO_LOW)
         return sched
 
     def _desugar_click(self, control: dict) -> list[dict]:
@@ -1723,7 +1776,8 @@ class CharState:
         else:
             self._reload_cancel_after_clip = True
 
-    def _enter_cover(self, t: float, bm: BuffManager, duration: float | None, label: str):
+    def _enter_cover(self, t: float, bm: BuffManager, duration: float | None, label: str,
+                     priority: int = 0):
         """엄폐 진입 — 사격·차징을 멈추고, 탄이 덜 찼으면 재장전을 건다.
 
         `duration=None`이면 재장전이 끝나는 순간까지만 엄폐한다. 재장전보다 길게 잡으면
@@ -1736,6 +1790,8 @@ class CharState:
             self._cover_until_reload = False
             self._cover_until = t + float(duration)
         self._reload_cancel_after_clip = False
+        # 이 엄폐가 **어느 등급으로** 열렸나 — 유지 요청이 이 값을 물려받는다.
+        self._ctrl_open_prio = priority
         # 엄폐하면 들고 있던 차지는 무효다 (재장전이 걸리지 않는 경우에도 마찬가지)
         if self.fire_mode == "charge":
             self._charge_phase = "ready"
@@ -1775,13 +1831,16 @@ class CharState:
             self._ctrl_seq_i += 1
             kind = act.get("action")
             if kind == "cover":
-                self._enter_cover(t, bm, act.get("duration"), "엄폐(시퀀스)")
+                self._enter_cover(t, bm, act.get("duration"), "엄폐(시퀀스)",
+                                  priority=_PRIO_SEQ)
                 entered = True
             elif kind == "hold" and self.fire_mode == "charge":
                 # 다음 풀차지를 `until`(절대 시각)까지 들고 있는다. until이 없으면 홀드하지 않는다.
                 # 절대 시각이라 릴리즈가 안 와서 영원히 안 쏘는 폭주가 구조적으로 없다.
                 until = act.get("until")
                 self._hold_release_t = -1.0 if until is None else float(until)
+                if until is not None:
+                    self._ctrl_open_prio = _PRIO_SEQ
         return entered
 
     def _apply_cover_policy(self, t: float, bm: BuffManager) -> bool:
@@ -1825,6 +1884,7 @@ class CharState:
 
         if entry["mode"] == "hold":
             self._hold_release_t = anchor - lead
+            self._ctrl_open_prio = entry["_prio"]
             return
 
         # `charge_hold_after_fb` — 본인 버스트가 **끝난 직후에** `charge_hold:N` 판정이
@@ -1859,10 +1919,23 @@ class CharState:
             return False
         self._cover_ctrl_anchor = anchor
         self._ctrl_anchor_kind, self._ctrl_anchor_val = "cover", anchor
-        self._enter_cover(t, bm, anchor - t + self.cover_extend, "엄폐 시작(버스트 엄폐컨)")
+        self._enter_cover(t, bm, anchor - t + self.cover_extend, "엄폐 시작(버스트 엄폐컨)",
+                          priority=self.cover_priority)
         return True
 
     # ── 조작자 배타 (카메라 한 대) ────────────────────────────────────────
+
+    def _prio_of(self, el: dict, default: int) -> int:
+        """컨트롤 요소 하나의 등급. **요소 지정 → 캐릭터 단위 지정 → 종류 기본값** 순.
+
+        요소마다 따로 적을 수 있어야 하는 이유는 같은 니케가 급한 조작과 안 급한 조작을
+        함께 들기 때문이다 — 버충 톡톡이(상)와 상시 재장전(하)을 한 캐릭터에 걸면
+        캐릭터 단위 등급 하나로는 표현되지 않는다.
+        """
+        val = el.get("priority")
+        if val is None:
+            val = self._ctrl_priority
+        return _parse_prio(val, default, self.name)
 
     def _owns(self, bm: BuffManager) -> bool:
         """지금 이 니케를 조작할 수 있는가 = 카메라를 잡고 있는가.
@@ -1873,27 +1946,30 @@ class CharState:
             return True
         return bm.state.get("ctrl_owner") == self.name
 
-    def _wants_control(self, t: float, bm: BuffManager) -> str | None:
+    def _wants_control(self, t: float, bm: BuffManager) -> tuple[str, int] | None:
         """지금 이 니케를 조작하고 싶은가 — **부작용 없이** 묻는다. 조율 단계 전용.
+        `(요청 종류, 등급)` 또는 None.
 
         이미 열려 있는 조작(엄폐·홀드)은 계속 잡고 있어야 하므로 **「유지」도 요청으로
-        센다** — 카메라를 떠나는 순간 풀려 버리기 때문이다.
+        센다** — 카메라를 떠나는 순간 풀려 버리기 때문이다. 유지의 등급은 그 조작을 연
+        정책에서 물려받는다(`_ctrl_open_prio`) — 열 때는 상이던 조작이 유지 중에
+        떨어지면 그대로 뺏긴다.
         """
         if self._ctrl_seq_i < len(self._ctrl_seq) and \
                 t >= float(self._ctrl_seq[self._ctrl_seq_i].get("t", 0.0)):
-            return "시퀀스"          # 유저가 시각을 찍은 조작 — 최우선
+            return "시퀀스", _PRIO_SEQ   # 유저가 시각을 찍었다 — 등급 밖의 최우선
         if self._cover_until_reload or self._cover_until > 0:
-            return "엄폐 유지"
+            return "엄폐 유지", self._ctrl_open_prio
         if self._hold_release_t > t:
-            return "홀드 유지"
+            return "홀드 유지", self._ctrl_open_prio
         if not (self._in_weapon_change or bm.get_weapon_change(self.name) is not None):
             if self._want_burst_cover(t, bm) is not None:
-                return "버스트 엄폐컨"
+                return "버스트 엄폐컨", self.cover_priority
             if self._want_reload_cover(t, bm) is not None:
-                return "장전컨"
+                return "장전컨", self.reload_priority
         e = self._click_entry(bm, _CLICK_PRESS_MODES + _CLICK_HOLD_MODES)
         if e is not None:
-            return f"클릭:{e['mode']}"
+            return f"클릭:{e['mode']}", e["_prio"]
         return None
 
     def _release_control(self, t: float, bm: BuffManager) -> None:
@@ -1955,7 +2031,8 @@ class CharState:
             return False
         self._reload_ctrl_anchor = anchor
         self._ctrl_anchor_kind, self._ctrl_anchor_val = "reload", anchor
-        self._enter_cover(t, bm, self.reload_cover_dur, "엄폐 시작(장전컨)")
+        self._enter_cover(t, bm, self.reload_cover_dur, "엄폐 시작(장전컨)",
+                          priority=self.reload_priority)
         return True
 
     def _want_reload_cover(self, t: float, bm: BuffManager) -> float | None:
@@ -3092,30 +3169,34 @@ def _arbitrate_control(t: float, bm: BuffManager, squad: list[dict],
     답을 바꾼다. 정책에는 부작용 없이 묻고(`_wants_control()`), 승자만 실제로
     조작한다(`_owns()`).
 
-    **후입 우선.** 나중에 들어온 요청이 가져가고, 뺏긴 쪽은 조작이 풀린다
-    (`_release_control()`). 카메라가 비면 다시 요청해 복귀한다.
+    **등급이 먼저, 그다음이 후입 우선.** 승자는 「이게 더 급해서」 정해진다 — 놓치면
+    사이클이 밀리는 조작(상)이 버프가 새는 조작(중)을 이기고, 그게 언제든 재개 가능한
+    조작(하)을 이긴다. 같은 등급 안에서만 **나중에 들어온 요청**이 가져간다. 등급 없이
+    후입만 보면 전투 내내 클릭을 잡는 상시 톡톡이가 「이 시각에 꼭 해야 하는」 조작을
+    밀어낸다. 뺏긴 쪽은 조작이 풀리고(`_release_control()`), 카메라가 비면 복귀한다.
 
     **전환에는 비용이 없다**(상류가 유저에게 확인 — 광클해도 불이익이 없다). 그래서
-    최소 점유 시간을 두지 않는다. 채터링은 **에지 판정**이 막는다 — 계속 원하는 것은
-    새 요청이 아니므로, 뺏은 쪽이 놓기 전까지 도로 뺏기지 않는다.
+    최소 점유 시간을 두지 않는다. 채터링은 두 겹으로 막힌다 — 같은 등급에서는 **에지
+    판정**이(계속 원하는 것은 새 요청이 아니므로 뺏은 쪽이 놓기 전까지 도로 뺏기지
+    않는다), 등급이 다를 때는 **선점이 한 방향뿐**이라(하가 상을 도로 못 뺏는다) 진동하지 않는다.
     """
     state = bm.state
     mode = state.get("ctrl_mode", "solo")
-    wants: list[tuple[int, "CharState", str, bool]] = []
+    wants: list[tuple[int, "CharState", str, int, bool]] = []
     for i, char in enumerate(squad):
         cs = char_states[char["name"]]
         req = cs._wants_control(t, bm)
         edge = req is not None and not cs._ctrl_want_prev   # 새 요청인가 (후입 판정)
         cs._ctrl_want_prev = req is not None
         if req is not None:
-            wants.append((i, cs, req, edge))
+            wants.append((i, cs, req[0], req[1], edge))
 
     if mode != "solo":
         # 전원을 동시에 조작하는 상한 모드. 카메라도 정적 유도값 그대로다.
         if mode == "strict" and len(wants) > 1:
             raise ValueError(
                 f"t={t:.3f}s: 같은 시각에 여러 니케를 조작할 수 없다 — "
-                + " · ".join(f"{c.name}({k})" for _, c, k, _ in wants)
+                + " · ".join(f"{c.name}({k})" for _, c, k, _, _ in wants)
                 + '. control_mode="warn"은 상한으로 허용하고 "solo"는 직렬화한다. '
                   "context/CONTROL.md §조작자는 한 명")
         if len(wants) > 1:
@@ -3124,8 +3205,8 @@ def _arbitrate_control(t: float, bm: BuffManager, squad: list[dict],
         return
 
     def _rank(w: tuple) -> tuple:
-        """정렬 키: **에지(후입) > 스쿼드 자리**. 마지막 항이 동점을 결정론으로 만든다."""
-        return (not w[3], w[0])
+        """정렬 키: **등급 > 에지(후입) > 스쿼드 자리**. 마지막 항이 동점을 결정론으로."""
+        return (-w[3], not w[4], w[0])
 
     owner = state.get("ctrl_owner", "")
     cur = next((w for w in wants if w[1].name == owner), None)
@@ -3136,8 +3217,10 @@ def _arbitrate_control(t: float, bm: BuffManager, squad: list[dict],
             # 카메라가 비었다 — 요청한 사람에게 준다(복귀 포함).
             owner = sorted(wants, key=_rank)[0][1].name
     else:
-        # 도전자는 **새 요청**뿐이다. 계속 원하고 있던 쪽은 도전자가 아니다.
-        chal = [w for w in wants if w[1].name != owner and w[3]]
+        # 도전자는 **등급이 더 높거나, 같은 등급의 새 요청**이다. 낮은 등급은 새
+        # 요청이어도 뺏지 못한다 — 상시 톡톡이가 엄폐컨을 밀어내는 것이 정확히 그 경우였다.
+        chal = [w for w in wants if w[1].name != owner
+                and (w[3] > cur[3] or (w[3] == cur[3] and w[4]))]
         if chal:
             pick = sorted(chal, key=_rank)[0]
             char_states[owner]._release_control(t, bm)
