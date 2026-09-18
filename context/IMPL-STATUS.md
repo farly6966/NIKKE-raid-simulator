@@ -450,11 +450,15 @@ python calculator/damage.py
 | `conditional_hit_count:그룹:N` | ✅ | 조건을 만족한 자기 일반 공격 명중만 그룹별로 누적해 N회마다 발동. 쿠루미의 풀버스트 중 36회 명중 |
 | `squad_burst_cast:N` | ✅ | `bm.notify("squad_burst_cast:N", ...)` |
 | `hit_count:N` | ✅ | `bm.notify("hit_count", ...)`. `trigger_count_reduce` 버프로 N 감소 가능 |
+| `on_attack_count:N` | ✅ | 실제 명중 수와 무관하게 `bm.notify("on_attack", ...)`의 N번째 발사 시. `trigger_count_reduce` 버프로 N 감소 가능 |
 | `hit_count:[스킬명]:N` | ✅ | named damage effect 명중 N회마다 발동. `_timing_match()`에 분기 추가. 타임라인 `_handle_damage_eff()` hit 루프 안에서 `bm.notify("hit_count:{eff_name}", t, caster)` 호출 |
 | `crit_hit_count:N` | ✅ | `bm.notify("crit_hit", ...)`. `trigger_count_reduce` 버프로 N 감소 가능 |
 | `full_charge` | ✅ | `bm.notify("full_charge", ...)` |
 | `full_charge_hit` | ✅ | `bm.notify("full_charge_hit", ...)` |
-| `full_charge_count:N` | ✅ | `full_charge_hit` 이벤트의 N번째 발생 시. `trigger_count_reduce` 버프로 N 감소 가능 |
+| `full_charge_fire` | ✅ | 차지형 무기의 완전 충전 발사 시, 명중 판정 전에 `bm.notify("full_charge_fire", ...)` |
+| `full_charge_fire_count:N` | ✅ | `full_charge_fire` 이벤트의 N번째 발생 시. `trigger_count_reduce` 버프로 N 감소 가능 |
+| `full_charge_hit_count:N` | ✅ | `full_charge_hit` 이벤트의 N번째 발생 시. `trigger_count_reduce` 버프로 N 감소 가능 |
+| `full_charge_count:N` | ✅ | 이전 데이터 호환 별칭. `full_charge_fire_count:N`과 동일하게 처리 |
 | `core_hit` | ✅ | `bm.notify("core_hit", ...)`. 코어 크기·명중률에 따른 실제/기대 코어 명중 이벤트 |
 | `core_hit_count:1` | ✅ | `bm.notify("core_hit", ...)` (횟수 없는 형태, `timing == event`로 처리) |
 | `core_hit_count:N` | ✅ | `bm.notify("core_hit", ...)`. `trigger_count_reduce` 버프로 N 감소 가능 |

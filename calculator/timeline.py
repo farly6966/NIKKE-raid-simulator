@@ -743,14 +743,21 @@ class CharState:
             _notify_frac(bm, "core_hit", self.name, core_frac,
                          lambda: bm.notify("core_hit", t, self.name))
 
-        # hit_count: 발사 1회당 1회 (펠릿 수와 무관). pellet_hit은 루프 내 펠릿마다 발생
+        # 발사(on_attack)와 명중(hit_count)은 별개 축이다. 발사는 탄 1발당 한 번이고,
+        # 명중은 총구 수만큼 발생한다. 펠릿은 한 탄을 나눈 것이므로 pellet_hit에서 따로 센다.
+        # 발사 이벤트를 먼저 보내 같은 탄의 "N회 공격 시" 효과가 뒤이은 명중 효과에
+        # 반영되도록 한다. 둘 다 현재 탄의 대미지 계산 뒤라 현재 탄 자체는 바뀌지 않는다.
         bm.notify(f"multi_hit:{hit_count}", t, self.name)
-        bm.notify("hit_count", t, self.name)
         bm.notify("on_attack", t, self.name)
+        for _ in range(self.muzzles):
+            bm.notify("hit_count", t, self.name)
         if not self._wc_is_skill_damage():
             bm.consume_bullet_buffs(self.name, t)
         if is_last:
-            bm.notify("last_bullet", t, self.name)
+            # 마지막 탄환 "명중 시" 역시 총구 단위다. 발사 단위 효과는
+            # last_bullet_fire로 위쪽 탄약 소비 경로에서 한 번만 나간다.
+            for _ in range(self.muzzles):
+                bm.notify("last_bullet", t, self.name)
 
         return events
 
@@ -1017,16 +1024,23 @@ class CharState:
         if self._sim_log is not None:
             self._sim_log.ammo_log.append(AmmoLogEntry(t=t, caster=self.name, ammo=self.ammo))
         bm.notify("squad_ammo_consume", t, self.name)
-        bm.notify("hit_count", t, self.name)
+        # 차지 무기도 발사와 명중을 분리한다. 풀차지 발사와 풀차지 명중은 서로 다른
+        # 트리거이며, 명중 계열은 총구 수만큼 발생한다.
+        bm.notify("on_attack", t, self.name)
         if is_full:
-            bm.notify("full_charge_hit", t, self.name)
+            bm.notify("full_charge_fire", t, self.name)
+        for _ in range(self.muzzles):
+            bm.notify("hit_count", t, self.name)
+        if is_full:
+            for _ in range(self.muzzles):
+                bm.notify("full_charge_hit", t, self.name)
         else:
-            bm.notify("non_full_charge_hit", t, self.name)
+            for _ in range(self.muzzles):
+                bm.notify("non_full_charge_hit", t, self.name)
         body_ev = "squad_part_hit" if enemy.get("has_parts", False) else "squad_body_hit"
         core_frac = P_core if expected else (1.0 if is_core else 0.0)
         _notify_frac(bm, body_ev, self.name, 1.0 - core_frac,
                      lambda: bm.notify_team_hit(body_ev, t, self.name))
-        bm.notify("on_attack", t, self.name)
         if not self._wc_is_skill_damage():
             bm.consume_bullet_buffs(self.name, t)
         _notify_frac(bm, "crit_hit", self.name, res["crit_frac"],
@@ -1034,7 +1048,8 @@ class CharState:
         _notify_frac(bm, "core_hit", self.name, core_frac,
                      lambda: bm.notify("core_hit", t, self.name))
         if is_last:
-            bm.notify("last_bullet", t, self.name)
+            for _ in range(self.muzzles):
+                bm.notify("last_bullet", t, self.name)
 
         # 톡톡이는 **사격 후 딜레이를 줄이는 컨트롤이다** — 풀차지로 나갔든 아니든
         # 떼기 + 덜 지운 사격 후 딜레이만 기다린다. 그래서 차지속도 버프로 차지가 짧아진

@@ -47,21 +47,30 @@ class RosterBatch04Test(unittest.TestCase):
         self.assertTrue(_find("유니", stat="enemy_movement_disable"))
         self.assertTrue(_find("미하라", stat="fullburst_duration"))
 
-    def test_frima_favorite_wakes_after_six_full_charge_hits(self):
+    def test_frima_favorite_wakes_after_six_full_charge_attacks(self):
         manager = BuffManager(build_squad(["프림"], {"프림": {"favorite_stage": 3}}), {"enemy": {}})
         manager.battle_start()
         for index in range(6):
+            manager.notify("full_charge_fire", 1.0 + index, "프림")
             manager.notify("full_charge_hit", 1.0 + index, "프림")
         self.assertTrue(manager._has_self_state("프림", "일어남"))
         self.assertTrue(manager.get_buffs("프림", "__enemy__", 6.0)["armor_break_enabled"])
 
+        hits_only = BuffManager(build_squad(["프림"], {"프림": {"favorite_stage": 3}}), {"enemy": {}})
+        hits_only.battle_start()
+        for index in range(6):
+            hits_only.notify("full_charge_hit", 1.0 + index, "프림")
+        self.assertFalse(hits_only._has_self_state("프림", "일어남"))
+
         interrupted = BuffManager(build_squad(["프림"], {"프림": {"favorite_stage": 3}}), {"enemy": {}})
         interrupted.battle_start()
         for index in range(3):
+            interrupted.notify("full_charge_fire", 1.0 + index, "프림")
             interrupted.notify("full_charge_hit", 1.0 + index, "프림")
         interrupted._active = [ab for ab in interrupted._active if ab.effect.get("name") != "잠 옴"]
         interrupted._invalidate_buffs_cache()
         for index in range(3, 6):
+            interrupted.notify("full_charge_fire", 1.0 + index, "프림")
             interrupted.notify("full_charge_hit", 1.0 + index, "프림")
         self.assertFalse(interrupted._has_self_state("프림", "일어남"))
 
