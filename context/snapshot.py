@@ -131,9 +131,12 @@ SQUADS: dict[str, dict] = {
     },
     "레이드_헬름아쿠아스노우": {
         # 커버: 헬름 : 아쿠아마린, 스노우 화이트, 에이드 : 에이전트 바니
-        # `optimal_range_weapons`: 에이드 : 에이전트 바니가 이 스쿼드의 유일한 SR이다.
-        # 적정 사거리에서 쏘는 자리이므로 명시한다(유저 확인) — 스킬 1·2의 아군 버프가
-        # `optimal_range` condition을 달고 있어, 안 적으면 통째로 무발동이다.
+        # `optimal_range_weapons`: 에이드 : 에이전트 바니가 적정 사거리에서 쏘는
+        # 자리이므로 명시한다(유저 확인) — 스킬 1·2의 아군 버프가 `optimal_range`
+        # condition을 달고 있어, 안 적으면 통째로 무발동이다.
+        # **스노우 화이트도 같이 받는다** — 그의 `세븐스 드워프 : I`가 SR 무기 변경이다.
+        # `optimal_range` condition은 로스터 `weapon_type`(AR)을 보지만 ③ 고정 +30%는
+        # 라이브 `weapon_type`을 보므로, 그 모드 동안만 그쪽이 붙는다(기본 공격 +8.25%).
         "members": ["미란다", "헬름 : 아쿠아마린", "에이드 : 에이전트 바니", "스노우 화이트", "에이다"],
         "enemy": {"optimal_range_weapons": ["SR"]},
         "config": {"first_burst_time": 3.0},
