@@ -74,16 +74,17 @@ git merge-base ce75361 Moris-kr/master  → f56124d
 |---|---|---|---|
 | `c751e2a` · `54e30af` | 首循環 Full Burst 預測 | **已移植** `997170e` | 政策 B·`if_dry` 原本只有「前一循環週期」觀測，第一循環沒值就不作用（CONTROL.md §미구현 記著）。補上冷卻鏈 fallback。**觀測仍優先** —— 鏈條看不到還沒撒下的 `burst_cooldown_reduce`。值只在 Full Burst 結束取一次，否則「每循環一次」守衛失效。fork 調整兩處：階段延遲是 `burst_switch_delay + burst_reaction`（上游只有前者）、`_burst_delay` 項拿掉（`544adeb` 未移植）。實測誤差 +0.020 秒 |
 | `8d16ea5`（클릭 스케줄） | `control.click` 統一 톡톡이／홀드 | **已移植** `8ae5faf` | 四窗 × 三模式，先匹配者勝，按下／放開分開詢問。舊鍵 desugar，**baseline 29/29 一格未動**。順帶拿掉 `_tick_charge` 重複的 `_hold_release_t < 0` 守衛 —— 留著排程順序沒有意義 |
-| `8d16ea5`（조작 모드） | `control_mode` solo／warn／strict | 需移植 | ↓ 與下列同批 |
-| `c961351` | 카메라 경합依等級仲裁 | 需移植 | fork 的 `camera`／`camera_mode` 是 **config 層靜態指定**；仲裁是**執行期會變的歸屬**，不是同一個東西。動它會改到 `컨트롤_*` 兩條 baseline |
-| `ac8fe2a` | anchor 語法·window enum·裝填控制 3 政策 | 需移植 | anchor／gate 是為了餵 `c961351` 而存在 |
-| `544adeb` | 爆裂納入 control·第五按鈕·delayed burst | 需移植 | priority 同上。`_burst_delay` 也在這裡 |
+| `8d16ea5`（조작 모드） | `control_mode` solo／warn／strict | **已移植** `44b84c6` | 판정과 집행을 가른 게 핵심 —— `_want_burst_cover()`·`_want_reload_cover()`를 순수 판정으로 떼어내야 조율이 정책에 **부작용 없이** 물을 수 있다. `_arbitrate_control()`은 char tick **이전에** 돈다(안에서 정하면 스쿼드 자리가 답을 바꾼다). 뺏기면 엄폐 해제·홀드 발사, 앵커는 **앵커당 1회만** 되돌린다. baseline `레이드_라피앨리스` +0.10% —— 舊 행위는 카메라가 3번 자리(라피, **MG**)에 180초 묶여 풀차지 배율을 쓸 수 없는 사람에게 갔다 |
+| `c961351` | 카메라 경합依等級仲裁 | **已移植** `b60462a` | 상 30(버충 톡톡이·장전컨 C) · 중 20(엄폐컨·홀드컨) · 하 10(상시 톡톡이·장전컨 A·B) · 시퀀스 99. **같은 톡톡이라도 목적이 다르면 등급이 다르다.** 유지 요청은 연 정책의 등급을 물려받는다. baseline 무변동(그 편성은 둘 다 하) —— 그래서 조율 규칙 자체를 직접 세운 테스트를 붙였다 |
+| `ac8fe2a` | anchor 語法·window enum·裝填控制 3 政策 | 需移植 | 「언제」를 **앵커+오프셋**(`fb_end + 2초부터 4초간`)으로도 적게 한다. 현재 fork는 상태 창 넷만 있다 —— `context/CONTROL.md` §미구현·보류의 「톡톡이 구간 — 앵커식」 |
+| `544adeb` | 爆裂納入 control·第五按鈕·delayed burst | 需移植 | **priority 부분은 `b60462a`에 들어갔다.** 남은 것은 버스트를 다섯째 원시 입력으로 편입하는 것과 `_burst_delay`(사이클 안에서 몇 초 기다렸다 누르나) —— 후자가 없어서 `997170e`의 쿨타임 사슬에서 딜레이 항을 뺐다 |
 | `29c7ce1` | attachment schema 統一 | 需移植 | — |
 | `cf8c9ec` | runtime control condition 擴充 | 需移植 | — |
 | `ec774c7` | 武器變更中控制排程不能停住 | 需移植 | — |
 
-**剩下七筆咬在一起**，拆開做沒有意義：`ac8fe2a` 的 anchor／gate 與 `544adeb` 的
-priority 都是 `c961351` 相機仲裁的輸入。
+**남은 다섯은 「언제」를 적는 어휘를 넓히는 쪽이다.** 등급도 仲裁 본체도 섰다.
+`ac8fe2a`의 anchor+offset 구간, `544adeb`의 delayed burst, `29c7ce1`·`cf8c9ec`·`ec774c7`이
+남는다 —— 이제 서로 독립이라 하나씩 해도 된다.
 
 ## 怎麼重新確認
 
