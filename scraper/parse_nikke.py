@@ -67,8 +67,9 @@ def parse_weapon_skill(text: str, is_charge: bool) -> dict:
 # 생성 파일(parsed_nikke.json)을 손으로 고치면 다음 재생성이 조용히 되돌린다(파스칼의
 # fire_mode가 실제로 그렇게 유실됐다). 근거는 PARSING-CHARS.md §캐릭터별 예외.
 _MANUAL_OVERRIDES: dict[str, dict] = {
-    # RL이지만 차지할 수 없는 전용 무기(Modified Gun) — RL 기본 차지 모드를 덮는다.
-    "파스칼": {"fire_mode": "auto"},
+    # 파스칼의 `fire_mode: auto`는 CDN `조작 타입`을 읽게 되면서 필요 없어졌다
+    # (아래 `is_charge`). 200명 전수 대조에서 무기군 추론과 CDN이 어긋나는 것은
+    # 파스칼 하나뿐이고, 이제 그 하나도 데이터가 직접 말해 준다.
 }
 
 
@@ -98,6 +99,13 @@ def parse_fire_mechanics(weapon: dict) -> dict:
         result["pellets"] = int(weapon["펠릿"])
     if weapon.get("총구"):
         result["muzzles"] = int(weapon["총구"])
+
+    # 蓄力武器與否。**這是和武器類型獨立的一個軸** —— 不是 SR/RL 就一定蓄力，反過來
+    # 也一樣。CDN `조작 타입`（武器說明文裡有沒有 `{charge_time}` 的位置）才是正本：
+    # RL 的 파스칼 是 `일반형`（武器技能原文寫著「無法蓄力攻擊的武器」）。
+    # 沒有 `조작 타입` 的預覽角色不建這個鍵，維持退回武器類型預設（`type`）的舊行為。
+    if weapon.get("조작 타입"):
+        result["is_charge"] = weapon["조작 타입"] == "차지형"
 
     # 히트당 버스트 게이지(%). CDN은 1/10000 % 단위다.
     # 실제 공격 게이지에는 `(대상)`을 쓴다. 이름만 보면 반대로 고르기 쉬운데, 유저

@@ -296,7 +296,22 @@ class CharState:
         self.mech = mech
         # 파스칼처럼 무기군은 RL이지만 차지할 수 없는 예외는 캐릭터 데이터가
         # 무기군 기본 발사 모드를 덮어쓴다.
-        self.fire_mode: str = weapon_data.get("fire_mode", mech["type"])
+        # 發射方式。"auto" / "auto_warmup" / "charge"。
+        # **是否蓄力是和武器類型獨立的一個軸** —— 不是 SR/RL 就一定蓄力，反過來也一樣。
+        # 正本是 CDN `조작 타입` 來的 `is_charge`（`scraper/parse_nikke.py`），武器類型
+        # 預設的 `type` 只是給沒有那個鍵的預覽角色用的退路。
+        #   RL 的 파스칼 = 非蓄力（原文「無法蓄力攻擊的武器」）—— 以前因為它是 RL 就被
+        #   當成蓄力，結果沒有 `charge_time`，組角色的當下就炸掉。
+        # 武器變更模式的蓄力與否不在這裡決定，由 `_tick_weapon_change()` 判。
+        _is_charge = weapon_data.get("is_charge")
+        if "fire_mode" in weapon_data:
+            self.fire_mode: str = weapon_data["fire_mode"]
+        elif _is_charge is None:
+            self.fire_mode = mech["type"]
+        elif _is_charge:
+            self.fire_mode = "charge"
+        else:
+            self.fire_mode = "auto" if mech["type"] == "charge" else mech["type"]
 
         self.ammo: int = weapon_data["max_ammo"]
         self.reloading_until: float = -1.0
@@ -1285,7 +1300,19 @@ class CharState:
 
         wc_weapon_type = wc_eff.get("weapon_type", "SR")
         wc_mech = _MECHANICS["weapon_type_defaults"].get(wc_weapon_type, {})
-        wc_fire_mode = wc_mech.get("type", "charge")
+        # **模式的蓄力與否也和武器類型獨立。** 技能原文寫了蓄力就是蓄力，武器類型預設的
+        # `type` 只是沒有那個標記時的退路。目前 fork 的項目都靠退路走對
+        # （드레이크 : 그레이트 빌런「오버 오버 드라이브」是把模式登記成 RL —— 使用者影片
+        # 確認那是發射器，2026-09-02），所以這個欄位現在沒有人用；有一天原文把兩個軸
+        # 拆開時，資料可以直接說，不必為了蓄力去謊報武器類型。
+        wc_charge = wc_eff.get("charge")
+        if wc_charge is None:
+            wc_fire_mode = wc_mech.get("type", "charge")
+        elif wc_charge:
+            wc_fire_mode = "charge"
+        else:
+            _t = wc_mech.get("type", "charge")
+            wc_fire_mode = "auto" if _t == "charge" else _t
         wc_max_ammo = wc_eff.get("max_ammo", 1)
         gauge_ref = wc_eff.get("max_ammo_gauge_ref")
         if gauge_ref:
