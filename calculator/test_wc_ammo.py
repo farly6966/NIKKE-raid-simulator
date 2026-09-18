@@ -91,5 +91,74 @@ class BuffedAmmoTest(unittest.TestCase):
         self.assertEqual(1, cs._buffed_ammo(bm, 0.0))
 
 
+class ModeEndRestoresFullAmmoTest(unittest.TestCase):
+    """模式結束 → 原武器回到滿彈（上游 `4f144d7`）。
+
+    原本是還原成 `orig_ammo`，而那個值在「有發射的 tick」抓到的是**模式的剩餘
+    彈藥**（1 發模式打完就是 0）。츠바이 因此每個循環帶著空彈匣出來，又在下一格
+    打出一發**空彈匣的幽靈射擊**才開始裝填。
+    """
+
+    MEMBERS = ["츠바이", "나유타", "프리바티", "스노우 화이트 : 헤비암즈", "리틀 머메이드"]
+
+    def _run(self):
+        from calculator.timeline import simulate
+        from context.spec import build_config
+
+        squad = build_squad(self.MEMBERS)
+        cfg = build_config(squad, {
+            "no_burst_char": "리틀 머메이드",
+            "first_burst_time": 3.0,
+            "rng_mode": "expected",
+        })
+        return simulate(squad, config=cfg, enemy={}, verbose=True, seed=42)
+
+    def test_mode_end_leaves_a_full_magazine(self):
+        """模式結束的那一刻，原武器的彈匣就是滿的 —— 不是 0，也不用先裝填。"""
+        import calculator.buff_manager as BM
+        from calculator.timeline import simulate
+        from context.spec import build_config
+
+        seen: list[tuple[float, int]] = []
+        squad = build_squad(self.MEMBERS)
+        states: dict = {}
+
+        original = BM.BuffManager.end_weapon_change
+
+        def spy(self, name, t):
+            original(self, name, t)
+            cs = states.get(name)
+            if cs is not None:
+                seen.append((t, cs.ammo))
+
+        BM.BuffManager.end_weapon_change = spy
+        try:
+            import calculator.timeline as TL
+            made = TL.CharState.__init__
+
+            def capture(cs, char, *a, **kw):
+                made(cs, char, *a, **kw)
+                states[cs.name] = cs
+
+            TL.CharState.__init__ = capture
+            try:
+                cfg = build_config(squad, {
+                    "no_burst_char": "리틀 머메이드",
+                    "first_burst_time": 3.0,
+                    "rng_mode": "expected",
+                })
+                simulate(squad, config=cfg, enemy={}, verbose=True, seed=42)
+            finally:
+                TL.CharState.__init__ = made
+        finally:
+            BM.BuffManager.end_weapon_change = original
+
+        zwei = [(t, ammo) for t, ammo in seen if ammo is not None]
+        self.assertTrue(zwei, "模式一次都沒結束過")
+        empty = [(t, ammo) for t, ammo in zwei if ammo <= 1]
+        self.assertEqual([], empty,
+                         f"模式結束時彈匣是空的（會多打一發幽靈射擊）：{empty[:5]}")
+
+
 if __name__ == "__main__":
     unittest.main()

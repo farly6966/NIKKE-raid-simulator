@@ -1,68 +1,69 @@
-# 상류 이식 대조표
+# 上游移植對照表
 
-`Jgaram/nikke-calc`의 엔진 수정이 이 fork에 있는가를 **커밋 단위로** 판정한 기록이다.
-「보기에 같다」로 넘기지 않기 위해 판정마다 근거를 적는다.
+判定 `Jgaram/nikke-calc` 的引擎修正在這個 fork 裡有沒有，**以 commit 為單位**。
+為了不要用「看起來一樣」帶過，每個判定都附根據。
 
-## 두 상류
+## 兩個上游
 
-이 fork는 `Jgaram/nikke-calc`의 fork가 **아니다.**
+這個 fork **不是** `Jgaram/nikke-calc` 的 fork。
 
 ```
-git merge-base ce75361 Jgaram/master    → 공통 조상 없음
+git merge-base ce75361 Jgaram/master    → 沒有共同祖先
 git merge-base ce75361 Moris-kr/master  → f56124d
 ```
 
-이 저장소의 역사는 `Moris-kr/nikke-calc`에서 왔고, `Jgaram/nikke-calc`는 같은 프로젝트를
-새 역사로 다시 발행한 쪽이다(첫 커밋이 2026-08-23 배포 스냅샷). 둘은 서로의 수정을
-옮겨 가며 발전해 왔으므로 **같은 결함이 서로 다른 구현으로 이미 고쳐져 있는 경우가 많다.**
-그래서 줄 단위 대조는 분류(triage)에만 쓰고, 판정은 언제나 의미로 한다.
+這個 repo 的歷史來自 `Moris-kr/nikke-calc`，而 `Jgaram/nikke-calc` 是同一個專案
+用新歷史重新發佈的那一邊（第一個 commit 是 2026-08-23 的部署快照）。兩邊會互相
+搬對方的修正，所以**同一個缺陷常常已經用不同的實作在各自那邊修好了**。
+因此逐行對照只用來做分類（triage），判定一律看語意。
 
-## 판정 기준
+## 判定基準
 
-| 판정 | 뜻 |
+| 判定 | 意思 |
 |---|---|
-| 이미 있음 | 같은 결함이 이 fork에서 이미 고쳐져 있다. 구현이 달라도 된다 |
-| 부분 | 본체는 있고 후속 보강만 빠졌다 |
-| 필요 | 이 fork에 그 결함이 살아 있다 |
-| 불필요 | 이 fork의 구조에서는 성립하지 않는다 |
+| 已存在 | 同一個缺陷在這個 fork 已經修好了。實作不同也算 |
+| 部分 | 本體有，只缺後續補強 |
+| 需移植 | 這個缺陷在這個 fork 還活著 |
+| 不適用 | 在這個 fork 的結構下不成立 |
+| 已移植 | 這次做掉了，附 commit |
 
-## C 구간 — 근래 엔진 수정
+## C 區 —— 近期引擎修正
 
-| 커밋 | 내용 | 판정 | 근거 |
+| commit | 內容 | 判定 | 根據 |
 |---|---|---|---|
-| `b97936b` | 차지 배율을 가산으로 | 이미 있음 | `calculator/damage.py`가 상류 master와 **바이트 동일**이다. damage.py에만 손대는 커밋은 정의상 전부 들어와 있다 |
-| `9c0d673` | 「차지 대미지 배율 ▲」은 무기 기본 배율에만 | 이미 있음 | 위와 같음 + `data/base_stat_tables/collection.json`의 SR·RL이 이미 `charge_dmg_mag_pct` |
-| `3b2de88` | 일반 공격 한정 크리 버프를 스킬 딜에서 뺀다 | 이미 있음 | `crit_rate_skill`·`crit_dmg_skill` 두 쌍이 `calculator/buff_manager.py`에 있다 |
-| `022de31` | 마지막 프레임 스킬 딜 유실 | 이미 있음 | 루프 종료 뒤 `_dot_events`를 다시 수거한다. fork 판본이 더 정교하다 — 속성 게이트와 누적까지 태운다 |
-| `11d6f97` | `ally_hp_below`가 시전자가 아닌 수령자를 본다 | 이미 있음 | `_runtime_condition_ok(conditions, ab.caster, caster, actual_recipient, t)` |
-| `721f82e` | 나유타 변신 사격을 스킬 대미지로 | 이미 있음 | `calculator/sim_result.py` `_is_normal()`의 이름 붙은 히트 분기 |
-| `e38b663` | 무기 변경 중에도 무기 타입은 기본 무기로 | 이미 있음 | `CharState.base_weapon_type` |
-| `775a9f4` | 레이븐 쇼크웨이브 중첩만큼 지속 대미지 | 이미 있음 | 레이븐 `dot_damage`에 `scaling: stack_count` |
-| `b8d77bf` | 신데렐라 : 크리스탈 웨이브 저격 모드 장탄 | 이미 있음 | 해당 `weapon_change`에 `max_ammo_buff_applies` |
-| `524e64a` | 차지 속도 면역 + 레이븐 파츠 | 이미 있음 | **이 fork master의 조상 커밋이다.** 회귀는 `calculator/test_charge_speed_immune.py`·`test_raven_parts.py` |
-| `23f5bff` | 차지형 무기 변경 첫 버스트 탄창 | 이미 있음 | 같음. 회귀는 `calculator/test_weapon_change_repeat.py` |
-| `4a1f4a9` | 차지 속도 면역은 스킬 버프만 막는다 | 이미 있음 | `524e64a`가 같은 결론을 이미 구현했다. 표현만 다르다 — 상류는 면제 목록을 `{equipment, cube}`로 **열거**하고 fork는 「스킬 소스만 제거」로 **여집합**을 쓴다. 차이가 드러나는 자리는 `collection`뿐이고, `collection.json`에 `charge_speed_pct`가 없어 **현재 도달 불가**다. 실측이 생기면 그때 가른다 |
-| `8fd9963` | 차지 여부를 무기 유형에서 분리 | 부분 | 파스칼(비차지 RL)은 fork가 `parsed_nikke.json`의 수동 `fire_mode: "auto"` 오버라이드로 이미 해결했다. **다만 무기 변경 모드 쪽이 비었다** — 드레이크 : 그레이트 빌런 `오버 오버 드라이브`가 상류에는 `charge: true`가 붙어 있는데 fork에는 없어, SG 기본값을 따라 **연사로 돈다** |
-| `d5ab3d0` | 무기 변경 최대 장탄 버프 | 부분 | `max_ammo_buff_applies` 본체는 `_full_ammo()`에 있다. 빠진 것은 `_wc_ammo_full` **래치** — 상류는 장탄을 채우는 사건(모드 진입·재장전 완료)에만 다시 재서, 모드 도중 장탄 버프가 붙었다 끊길 때 종료 조건이 흔들리는 것을 막는다 |
-| `4f144d7` | 모드 종료 시 만탄 복귀 | **필요** | fork는 `_wc_ammo_borrowed`(= 연사 모드)일 때만 채운다. **차지 모드는 잔탄을 그대로 들고 나온다.** 모드 안에서 잡힌 재장전을 취소하는 처리도, 종료 경로가 둘인 것을 가리는 `_wc_ammo_restored` 플래그도 없다 |
-| `63a784e` | 실행 순서·모드 복귀·공짜 풀차지·MG 예열 | **필요** | 발수 소진 종료 경로에는 차지 초기화가 있으나 **지속시간 만료·토글 해제 경로에는 없다.** 모드 진입 전 `_charge_start_t`가 얼어 있다가 복귀 프레임에 공짜 풀차지 한 발이 된다. 영향: 벨벳 `깔끔한 마무리` · 타키나 `제압 개시` · 라플라스 `라플라스 버스터` |
-| `927a613` | 「N발 유지」 버프가 자기 조건을 스스로 깬다 | **필요** | `_has_runtime_cond()`에 `duration_bullets` 인자가 없다. 발수 만료 버프는 `expires_at`이 `inf`로 남아 런타임 재평가 게이트를 통과하고, `not_self_state:`로 재부여를 막는 버프가 스스로를 끈다. 영향: 베스티 : 택티컬 업 `미사일 가이드` |
-| `b3ec538` | 그레이브 과열 30·60회 카운터 | **필요** | fork의 `parsed_skills.json`에 `과열 명중` 게이지가 없다 |
+| `b97936b` | 蓄力倍率改為加算 | 已存在 | `calculator/damage.py` 與上游 master **位元組完全相同**。只動 damage.py 的 commit 依定義全部都在 |
+| `9c0d673` | 「蓄力傷害倍率 ▲」只吃武器基本倍率 | 已存在 | 同上 + `data/base_stat_tables/collection.json` 的 SR·RL 已經是 `charge_dmg_mag_pct` |
+| `3b2de88` | 只對普攻生效的爆擊增益要從技能傷害扣掉 | 已存在 | `crit_rate_skill`·`crit_dmg_skill` 兩組都在 `calculator/buff_manager.py` |
+| `022de31` | 最後一格的技能傷害遺失 | 已存在 | 迴圈結束後會再收一次 `_dot_events`。fork 的版本更細 —— 連屬性閘門和累積都算進去 |
+| `11d6f97` | `ally_hp_below` 看錯對象（看接收者而非施放者） | 已存在 | `_runtime_condition_ok(conditions, ab.caster, caster, actual_recipient, t)` |
+| `721f82e` | 娜由塔變身射擊要算技能傷害 | 已存在 | `calculator/sim_result.py` `_is_normal()` 的具名命中分支 |
+| `e38b663` | 武器變更期間武器類型仍看基本武器 | 已存在 | `CharState.base_weapon_type` |
+| `775a9f4` | 蕾雯衝擊波依疊層數給持續傷害 | 已存在 | 蕾雯的 `dot_damage` 有 `scaling: stack_count` |
+| `b8d77bf` | 灰姑娘：琉璃波光狙擊模式的彈藥 | 已存在 | 該 `weapon_change` 有 `max_ammo_buff_applies` |
+| `524e64a` | 蓄力速度免疫 + 蕾雯部位 | 已存在 | **這是本 fork master 的祖先 commit。** 回歸測試在 `calculator/test_charge_speed_immune.py`·`test_raven_parts.py` |
+| `23f5bff` | 蓄力型武器變更的第一次爆裂彈匣 | 已存在 | 同上。回歸測試在 `calculator/test_weapon_change_repeat.py` |
+| `4a1f4a9` | 蓄力速度免疫只擋技能增益 | 已存在 | `524e64a` 已經實作了同樣的結論，只是寫法不同 —— 上游把豁免清單**列舉**成 `{equipment, cube}`，fork 用「只移除技能來源」取**補集**。唯一會分出差別的位置是 `collection`，而 `collection.json` 裡沒有 `charge_speed_pct`，所以**目前到不了**。有實測再來分 |
+| `8fd9963` | 把「是否蓄力」從武器類型分離 | 部分 | 帕斯卡（非蓄力 RL）fork 已經用 `parsed_nikke.json` 的手動 `fire_mode: "auto"` 覆寫解決。**但武器變更那一邊是空的** —— 德雷克：終極反派「超超速運作」上游標了 `charge: true`，fork 沒有，於是跟著 SG 預設值**以連射在跑** |
+| `d5ab3d0` | 武器變更的最大彈藥增益 | **已移植** `db3614c` | `max_ammo_buff_applies` 本體本來就在 `_full_ammo()`。這次補的是 `_wc_ammo_full` **鎖存** —— 只在填彈事件（進入模式·裝填完成）重新量測，避免模式進行中彈藥增益開關導致結束條件晃動。順帶把 fork 專屬的量表連動動態彈藥（E.H.）也收進同一個窗口 |
+| `4f144d7` | 模式結束時滿彈復歸 | **已移植**（本 commit） | fork 原本只在 `_wc_ammo_borrowed`（= 連射模式）時填，**蓄力模式把剩餘彈藥原封不動帶出來**。而且 `orig_ammo` 在「有發射的 tick」抓到的是模式的剩餘彈藥 → 츠바이 每循環多打一發空彈匣的幽靈射擊。兩條結束路徑用 `_wc_ammo_restored` 保證只填一次 |
+| `63a784e` | 執行順序·模式復歸·免費滿蓄力·MG 預熱 | **已移植** `2287c10` | 發數耗盡的結束路徑有蓄力重置，**持續時間到期·切換解除的路徑沒有**。進入模式前的 `_charge_start_t` 凍著，回到原武器就變成一發免費滿蓄力。影響薇爾維特「俐落收尾」· 瀧奈「壓制開始」· 拉普拉斯「拉普拉斯炸彈」 |
+| `927a613` | 「N 發維持」的增益自己破壞自己的條件 | **已移植** `5c2cf49` | `_has_runtime_cond()` 沒有 `duration_bullets` 參數。發數到期的增益 `expires_at` 留在 `inf`，通過了 runtime 重新評估的閘門，於是用 `not_self_state:` 擋重複施加的增益把自己關掉。影響貝斯蒂：戰術升級「飛彈導引」。連帶修正了 `parsed_skills.json` 的效果排列 |
+| `b3ec538` | 格拉維過熱 30·60 次計數器 | **需移植** | fork 的 `parsed_skills.json` 裡沒有「過熱命中」的量表 |
 
-## A 구간 — 누적식 버스트 게이지 (완료)
+## A 區 —— 累積式爆裂量表（完成）
 
-| 커밋 | 판정 | 비고 |
+| commit | 判定 | 備註 |
 |---|---|---|
-| `3935b6b` | 이식 완료 | `0adfb79` |
-| `f12fc35` | 이식 완료 | `fd674fd` — `context/mechanics/버스트 게이지.md` |
-| `1246e2e` | 이식 완료 | `fd674fd` |
-| `93ec10a` | 부분 이식 | `tap_fire.window`는 `fd674fd`, 장전컨 정책 C는 `11b1e63`. **남은 것**: `clip_count`(CDN `reload_bullet`) · `reload_ratio_pct`(그레이브 `방열`) · 「무기 변경 상태」 총칭 판정 · `ammo_charge_pct` 음수 하한 |
-| `cf0ef28` | 불필요 | 상류가 **자기 하네스 3조합**의 장전컨을 상수(정책 A)에서 정책 C로 옮긴 커밋이다. 이 fork의 29개 baseline 조합에는 컨트롤 설정이 **하나도 없어** 옮길 상수가 없다. baseline에 조작을 새로 얹는 것은 이식이 아니라 하네스 설계 결정이고, 기본 모드가 `fixed`인 동안에는 컨트롤이 손해로만 잡힌다 |
-| `1300089` | 건너뜀 | `3b63720`이 통째로 되돌렸다. 중간형의 캘리브 상수(`ally_flat`)는 상류 자신이 「원인 미상·산포 ±30%」로 적어 두고 9일 뒤 제거했다 |
-| `3b63720` | 이식 완료 | `15f0268` |
+| `3935b6b` | 已移植 | `00c48ac` |
+| `f12fc35` | 已移植 | `9ef6b7d` —— `context/mechanics/버스트 게이지.md` |
+| `1246e2e` | 已移植 | `9ef6b7d` |
+| `93ec10a` | 部分移植 | `tap_fire.window` 在 `9ef6b7d`，裝填控制政策 C 在 `008da4b`。**還剩**：`clip_count`（CDN `reload_bullet`）· `reload_ratio_pct`（格拉維「放熱」）·「武器變更狀態」的總稱判定 · `ammo_charge_pct` 負值下限 |
+| `cf0ef28` | 不適用 | 這個 commit 是上游把**自己測試用的 3 個編成**的裝填控制從常數（政策 A）換成政策 C。這個 fork 的 29 個 baseline 編成**一個控制設定都沒有**，沒有常數可以換。在 baseline 上新加操作屬於測試台設計決策，不是移植；而且預設模式還是 `fixed` 的期間，控制只會算成損失 |
+| `1300089` | 跳過 | `3b63720` 整個退掉了。中間型的校正常數（`ally_flat`）是上游自己註明「原因不明·離散 ±30%」，9 天後就移除了 |
+| `3b63720` | 已移植 | `a0fa513` |
 
-## 다시 확인하는 법
+## 怎麼重新確認
 
-줄 단위 분류는 `git show --format= <커밋> -- calculator/`의 `+` 줄이 fork 소스에 그대로
-있는지를 세면 나온다. **그 수치는 분류일 뿐 판정이 아니다** — `63a784e`는 추가된 코드
-5줄이 전부 fork에 있었지만 **다른 경로**에 있었고, 정작 고쳐야 할 경로는 비어 있었다.
+逐行分類的做法是數 `git show --format= <commit> -- calculator/` 的 `+` 行有幾行原封不動
+出現在 fork 原始碼裡。**那個數字只是分類，不是判定** —— `63a784e` 新增的 5 行程式碼
+fork 裡全部都有，但在**別的路徑**上，真正該修的那條路徑是空的。

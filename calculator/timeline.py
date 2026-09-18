@@ -390,6 +390,12 @@ class CharState:
         # 연사 무기 모드는 진입 시 self.ammo를 모드 장탄으로 덮어쓴다(원래 장탄은 버린다).
         # 모드가 끝날 때 되돌려 놓아야 그 값이 원래 무기로 새어 나가지 않는다.
         self._wc_ammo_borrowed: bool = False
+        # 這一次的模式結束，滿彈復歸是不是已經做過了。結束路徑有兩條
+        # （發數耗盡 = `_tick_weapon_change` / 持續時間到期·切換解除 = `tick`），
+        # 沒有這個旗標兩邊都會填，於是**填了兩次** —— 以發數耗盡結束的模式，它的
+        # `event:state_end` 彈藥操作（拉普拉斯：究極英雄「彈藥 100% 移除」）會被下一個
+        # tick 的復歸蓋掉，該有的裝填就整個消失。
+        self._wc_ammo_restored: bool = False
         # `max_ammo_buff_applies` 模式的實效最大彈藥。**只在「填滿彈藥」的事件重新量測**
         # —— 就只有「進入模式」和「裝填完成」兩種，而技能原文的括號句會指出對每個角色
         # 有意義的是哪一邊（拉普拉斯：究極英雄「使用武器變更時」—— 模式內不裝填 /
@@ -542,6 +548,7 @@ class CharState:
                 self._wc_shots = 0
                 self._wc_new_session = True
                 self._wc_ammo_full = None   # 進入的當下重新量測
+                self._wc_ammo_restored = False
             # 자기 탄창을 관리하는 모드(지속형 + 유한 장탄)만 모드 안에서 재장전을 완료시킨다.
             # 처리하지 않으면 장탄 소진 후 재장전이 끝나지 않아 발사가 영원히 멈춘다.
             # 시한부 모드(duration 있음)나 무한 장탄 모드는 기존 동작을 유지한다 —
@@ -573,13 +580,26 @@ class CharState:
             self._charge_full_t = -1.0
             self._hold_release_t = -1.0
             bm.state.setdefault("charging", {})[self.name] = False
-            if self._wc_ammo_borrowed:
-                # 시한부 연사 모드가 duration으로 끝났다. 진입 시 덮어쓴 모드 장탄
-                # (무한 장탄이면 센티널 999999)이 그대로 남아 원래 무기의 탄창으로
-                # 새어 나가면 모드가 끝난 뒤에도 재장전이 사라진다.
-                # 모드 종료 = 재장전 완료 상태로 본다 (유저 확인). 모더니아 `섬멸 모드`.
+            # 限時模式以 duration 結束、或切換被解除了。**模式一結束，原武器就回到滿彈**
+            # —— 不看發射了幾發、不看持續時間、也不看進入前的剩餘彈藥。模式結束視為
+            # 「裝填完成」的狀態。進入時覆寫的模式彈藥（無限彈藥時是哨兵值 999999）
+            # 要是就這樣漏進原武器的彈匣，模式結束後裝填會整個消失（摩德尼亞「殲滅模式」）。
+            #
+            # 原本只有 `_wc_ammo_borrowed`（= 連射模式）才填 —— **蓄力模式走這條路徑時
+            # 是把剩餘彈藥原封不動帶出來的**。這裡模式已經到期（`wc_eff is None`），
+            # `_full_ammo` 給的就是原武器的基準，所以直接用。
+            #
+            # **以發數耗盡結束的模式，`_tick_weapon_change` 已經填過了** —— 這裡再填一次
+            # 會蓋掉當時 `event:state_end` 觸發的彈藥操作。
+            if not self._wc_ammo_restored:
                 self.ammo = self._full_ammo(bm, t)
-                self._wc_ammo_borrowed = False
+                self._wc_ammo_full = None
+                if self.reloading_until > 0 and self._reload_in_weapon_change:
+                    # 模式內排定的裝填，遇上滿彈復歸就沒有意義了。
+                    self.reloading_until = -1.0
+                    self._reload_in_weapon_change = False
+            self._wc_ammo_borrowed = False
+            self._wc_ammo_restored = False
 
         # 최대 장탄 증가 버프가 만료되면 초과 잔탄은 잘린다 (유저 확인, GAMEPLAY §무기 메카닉).
         # 잔탄은 발사로만 줄어들기 때문에, 여기서 재평가하지 않으면 `[N초 유지]` 장탄 버프가
@@ -1419,13 +1439,26 @@ class CharState:
         if duration_bullets is not None and self._wc_shots >= duration_bullets:
             # 원래 무기로 돌아오면 charge_phase를 ready로 초기화
             self._charge_phase = "ready"
-            if wc_fire_mode in ("auto", "auto_warmup"):
-                # 마지막 발과 같은 tick에 잡힌 변경 무기 재장전 예약은 무효
-                # (변경 무기는 재장전하지 않는다 — 장탄 소진이 곧 모드 종료)
-                self.reloading_until = -1.0
-                self.next_fire_time = t
-            self.ammo = orig_ammo if orig_ammo is not None else self.weapon["max_ammo"]
+            # 和最後一發同一個 tick 排定的「變更武器裝填」預約無效
+            # （變更武器不裝填 —— 彈藥耗盡本身就是模式結束）。
+            # **不只連射模式** —— 蓄力模式要是把模式內排定的裝填帶出來，滿彈復歸後
+            # 那個裝填還是會照跑。
+            self.reloading_until = -1.0
+            self.next_fire_time = t
+            # **模式一結束，原武器就回到滿彈** —— 用 `_buffed_ammo` 取這個角色的**實效**
+            # 最大彈藥（反映裝備選項·方塊·收藏品·技能增益；`self.weapon` 在上面已經換回
+            # 原武器了）。這裡不能呼叫 `_full_ammo` —— `end_weapon_change` 還在下面，模式
+            # 效果還活著，那邊會給**模式的彈藥**。
+            #
+            # 原本是還原成 `orig_ammo`（函式開頭抓的剩餘彈藥），但那個值在「有發射的
+            # tick」裡 `was_ready` 為假，抓到的是**模式的剩餘彈藥** → SMG 只帶 1 發出來，
+            # 緊接著就被插入一次裝填。
+            # 帶「彈藥 N% 移除」的模式（拉普拉斯：究極英雄·德雷克：終極反派）會由下面的
+            # 結束事件蓋掉滿彈、正常裝填 —— 所以順序必須是這樣。
+            self.ammo = self._buffed_ammo(bm, t)
+            self._wc_ammo_full = None
             self._wc_ammo_borrowed = False   # 여기서 이미 원복했다 (tick의 만료 처리와 중복 금지)
+            self._wc_ammo_restored = True    # 同上 —— 不讓 tick 那邊再蓋一次
             self._wc_dynamic_ammo = None
             # 장탄 원복이 끝난 뒤에 종료 이벤트를 쏜다 — event:state_end로 발동하는
             # 장탄 조작 효과(라플라스 `탄환 100% 제거`)가 원복에 덮이지 않도록.
