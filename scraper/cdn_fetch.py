@@ -219,6 +219,13 @@ def adapt(role: dict) -> tuple[str, dict]:
             "연사증가(rpm/발)": shot.get("rate_of_fire_change_pershot", 0),
             "펠릿": shot.get("shot_count", 1),
             "총구": shot.get("muzzle_count", 1),
+            # 샷당 버스트 게이지 충전량(1/10000%). `(대상)`이 `(발당)`의 정확히 2배이고,
+            # 실제 공격이 주는 게이지는 `(대상)` 쪽이다 — 유저 인게임 실측 6건이 그렇다.
+            # `(발당)`은 「버스트 충전 속도」의 시전자 기준식이 참조한다.
+            # 해석·유도식의 정본은 `context/GAMEPLAY.md §버스트 게이지`다.
+            "버스트게이지(발당)": shot.get("burst_energy_pershot", 0),
+            "버스트게이지(대상)": shot.get("target_burst_energy_pershot", 0),
+            "버스트게이지(풀차지)": shot.get("full_charge_burst_energy", 0),
             "무기스킬": render_weapon_skill(shot),
         },
         "스킬": skills,

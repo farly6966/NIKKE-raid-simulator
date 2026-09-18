@@ -168,6 +168,7 @@ _BUFFS_ZERO: dict[str, Any] = {
     "skill_cooldown_pct": 0.0,  # 스킬 쿨타임 % 감소 (음수 = 감소)
     "charge_speed_overflow_conversion_pct": 0.0,  # charge_speed 100% 초과분 × N% → charge_dmg_pct 추가
     "mg_warmup_speed_pct": 0.0,  # MG 예열 진행 속도 % (음수 = 감소). -100이면 warmup_shots 증가 정지
+    "burst_charge_speed_pct": 0.0,  # 버스트 게이지 충전 속도 %. 모든 게이지 가산에 곱연산
 }
 
 # parsed_skills stat → buffs 딕셔너리 키 매핑
@@ -236,6 +237,9 @@ _STAT_TO_BUFF: dict[str, str] = {
     "skill_cooldown_pct":   "skill_cooldown_pct",
     "charge_speed_overflow_conversion_pct": "charge_speed_overflow_conversion_pct",
     "mg_warmup_speed_pct": "mg_warmup_speed_pct",
+    # 2024-12-05에 `버스트 게이지 획득량` → `버스트 게이지 충전 속도`로 **표기만** 바뀌었다.
+    # 별개 메커니즘이 아니므로 stat도 하나다.
+    "burst_charge_speed_pct": "burst_charge_speed_pct",
 }
 
 # 크리확률로 합산되는 stat 집합 (백분율 → 확률 환산 후 기본 15%와 합연산)
@@ -544,6 +548,8 @@ class BuffManager:
 
         # instant 이벤트 로그 콜백. 타임라인이 register_instant_event_handler()로 주입
         self._instant_event_handler: Any = None
+        # 버스트 게이지 가산 로그 콜백. 타임라인이 register_gauge_event_handler()로 주입
+        self._gauge_event_handler: Any = None
 
         # damage 효과 핸들러. 타임라인이 register_damage_handler()로 주입
         self._damage_handler: Any = None
@@ -921,6 +927,12 @@ class BuffManager:
         handler(name, caster, target, t, stat, value) 시그니처.
         """
         self._instant_event_handler = handler
+
+    def register_gauge_event_handler(self, handler):
+        """타임라인이 버스트 게이지 가산 로그 콜백을 등록한다.
+        handler(t, caster, source, amount, gauge) 시그니처.
+        """
+        self._gauge_event_handler = handler
 
     def _dispatch_instant(self, eff: dict, caster: str, t: float, from_tick: bool = False):
         """instant 효과를 핸들러로 라우팅하거나 내장 로직으로 처리.
@@ -2093,6 +2105,30 @@ class BuffManager:
             self._active = [ab for ab in self._active if ab not in consumed]
             self._invalidate_buffs_cache()
         return 1.0 + bonus / 100.0
+
+    def add_burst_gauge(self, amount: float, t: float,
+                        caster: str = "", source: str = "") -> float:
+        """공용 버스트 게이지에 가산하고 실제로 들어간 양을 돌려준다.
+
+        **충전 창·상한·폐기 규칙을 여기 한 곳에 가둔다.** 그래서 부르는 쪽(발사·차지·
+        스킬 대미지·instant 핸들러)은 "얼마를 만들었나"만 알면 되고 언제 충전되는지는
+        몰라도 된다.
+
+        - 게이지는 스쿼드 공용 1개다 (캐릭터별이 아니다).
+        - **풀버스트가 끝나기 전까지는 충전되지 않는다** (유저 인게임 확인). 그 조건이
+          `BurstController._phase == "idle"`과 정확히 같아서, 컨트롤러가 매 tick
+          `state["burst_gauge_charging"]`에 그 값을 실어 준다.
+        - 만충 100 초과분은 버려진다 (유저 인게임 확인) — 그래서 min()이지 이월이 아니다.
+        """
+        if amount <= 0.0 or not self.state.get("burst_gauge_charging", False):
+            return 0.0
+        cur = self.state.get("burst_gauge", 0.0)
+        new = min(100.0, cur + amount)
+        self.state["burst_gauge"] = new
+        added = new - cur
+        if self._gauge_event_handler is not None and added > 0.0:
+            self._gauge_event_handler(t, caster, source, added, new)
+        return added
 
     def sync_hp(self, name: str):
         """state['hp']를 기준으로 state['hp_pct']를 재계산한다.
