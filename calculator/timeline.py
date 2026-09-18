@@ -2439,6 +2439,13 @@ class BurstController:
         # reenter 대기 중인 단계
         self._reenter_stage: str = ""
 
+        # **이번 사이클에 재진입을 이미 연 단계.** 재진입은 단계마다 사이클당 한 번이다.
+        # 상한이 없으면 재진입 자리에서 뽑힌 동료가 또 재진입 니케일 때 슬롯이 계속
+        # 열려 그 단계에 영원히 갇힌다 — 풀버스트가 한 번도 돌지 않는다.
+        # 이 fork의 데이터에는 재진입 니케가 셋 있어(아니스 : 스타 · 루피 : 윈터 쇼퍼 · 티아)
+        # 둘만 같은 스쿼드에 서면 바로 열리는 경로다.
+        self._reenter_done_stages: set[str] = set()
+
         # 풀버스트 진입 시 발동할 버스트 대미지 (버프 적용 후 계산)
         self._pending_burst_dmg: list[tuple[str, dict, int]] = []  # (caster, eff, hit_count)
 
@@ -2509,6 +2516,8 @@ class BurstController:
                 # 1단계 진입이 게이지를 소모한다. 100을 넘긴 몫은 여기서 사라진다
                 # (초과분은 이월되지 않는다).
                 state["burst_gauge"] = 0.0
+                # 새 사이클이 시작되는 순간 비운다 — 재진입 한도는 사이클당이다.
+                self._reenter_done_stages.clear()
                 self._phase = "stage:1"
                 self._next_action_t = t + self._burst_reaction
                 for n in self.squad_names:
@@ -2523,19 +2532,38 @@ class BurstController:
             earliest = min(self.burst_ready_at.get(n, 0.0) for n in self._cd_wait_candidates)
             self._next_action_t = min(self._next_action_t, max(t, earliest))
 
-        # ── 단계 스킬 사용 ─────────────────────────────────────────────────
-        if self._phase.startswith("stage:") and t >= self._next_action_t - 1e-9:
-            stage = self._phase.split(":")[1]
+        # ── 단계 스킬 사용 (본 차례 · 재진입 자리 공통) ────────────────────
+        # **두 자리가 같은 코드를 쓴다.** 재진입 자리도 "그 단계를 한 번 쓰고 다음으로
+        # 넘어간다"는 점에서 본 차례와 다르지 않다. 갈라 두었을 때 재진입 쪽만
+        # `_try_use_stage`의 재진입 반환값을 버려서, 재진입 니케 둘이 같은 단계에 서면
+        # 슬롯이 닫히지 않고 그 단계에 갇혔다.
+        if self._phase.startswith(("stage:", "reenter:")) and t >= self._next_action_t - 1e-9:
+            in_reenter_slot = self._phase.startswith("reenter:")
+            stage = self._reenter_stage if in_reenter_slot else self._phase.split(":")[1]
+
+            if in_reenter_slot:
+                # 재진입 단계 진입 이벤트 발생 (burst_enter:N 조건 트리거용)
+                for n in self.squad_names:
+                    bm.notify(f"burst_enter:{stage}", t, n)
+
+            # 재진입 자리에서는 해당 단계 후보 중 쿨이 풀린 캐릭터를 재선출한다
+            # (재진입을 연 사람은 방금 썼으므로 이미 쿨이다).
             ev, advanced, reenter_info = self._try_use_stage(stage, t, bm, state)
             events.extend(ev)
 
-            if reenter_info:
-                # reenter: 같은 단계 재진입 대기 (사용자는 딜레이 후 재선출)
-                _, r_stage = reenter_info
-                self._reenter_stage = r_stage
-                self._phase = f"reenter:{r_stage}"
+            # `reenter_info`가 돌아왔다는 것은 **버스트가 이미 나갔다**는 뜻이다 —
+            # `advanced`만 False일 뿐이다. 재진입을 더 열지 않기로 해도 그 단계는
+            # 끝났으므로 둘을 합쳐 "이번에 누가 썼나"로 본다.
+            used = advanced or reenter_info is not None
+
+            if reenter_info and stage not in self._reenter_done_stages:
+                # reenter: 같은 단계 재진입 대기 (사용자는 딜레이 후 재선출).
+                # 단계마다 사이클당 한 번만 연다 — `_reenter_done_stages` 주석 참조.
+                self._reenter_done_stages.add(stage)
+                self._reenter_stage = stage
+                self._phase = f"reenter:{stage}"
                 self._next_action_t = t + self.config.get("burst_reenter_delay", 0.5)
-            elif advanced:
+            elif used:
                 if stage == "3":
                     self._phase = "switching"
                     self._next_action_t = t + 0.05
@@ -2546,29 +2574,8 @@ class BurstController:
                                            + self._burst_reaction)
                     for n in self.squad_names:
                         bm.notify(f"burst_enter:{next_stage}", t, n)
-
-        # ── reenter 딜레이 완료 → 재진입 ──────────────────────────────────
-        if self._phase.startswith("reenter:") and t >= self._next_action_t - 1e-9:
-            r_stage = self._reenter_stage
-            # 재진입 단계 진입 이벤트 발생 (burst_enter:N 조건 트리거용)
-            for n in self.squad_names:
-                bm.notify(f"burst_enter:{r_stage}", t, n)
-            # 해당 단계 후보 중 쿨타임이 풀린 캐릭터를 재선출 (reenter 발동자는 이미 쿨)
-            ev, advanced, _ = self._try_use_stage(r_stage, t, bm, state)
-            events.extend(ev)
-            if not advanced:
-                # 전원 쿨타임 중이면 대기 (이미 _next_action_t가 갱신됨)
-                pass
-            elif r_stage == "3":
-                self._phase = "switching"
-                self._next_action_t = t + 0.05
-            else:
-                next_stage = str(int(r_stage) + 1)
-                self._phase = f"stage:{next_stage}"
-                self._next_action_t = (t + self.config.get("burst_switch_delay", 0.1)
-                                       + self._burst_reaction)
-                for n in self.squad_names:
-                    bm.notify(f"burst_enter:{next_stage}", t, n)
+            # used가 False면 전원 쿨타임 중이다. `_try_use_stage`가 잡아 둔 시각까지
+            # 이 자리에서 기다린다 — 재진입 자리도 짝의 쿨이 돌아오면 그때 쓴다.
 
         # ── 전환 딜레이 → 풀버스트 진입 ───────────────────────────────────
         if self._phase == "switching" and t >= self._next_action_t - 1e-9:
