@@ -390,6 +390,13 @@ class CharState:
         # 연사 무기 모드는 진입 시 self.ammo를 모드 장탄으로 덮어쓴다(원래 장탄은 버린다).
         # 모드가 끝날 때 되돌려 놓아야 그 값이 원래 무기로 새어 나가지 않는다.
         self._wc_ammo_borrowed: bool = False
+        # `max_ammo_buff_applies` 模式的實效最大彈藥。**只在「填滿彈藥」的事件重新量測**
+        # —— 就只有「進入模式」和「裝填完成」兩種，而技能原文的括號句會指出對每個角色
+        # 有意義的是哪一邊（拉普拉斯：究極英雄「使用武器變更時」—— 模式內不裝填 /
+        # 灰姑娘：琉璃波光「裝填完成時」—— 模式內會裝填）。每個 tick 重量的話，模式進行
+        # 中彈藥增益一掛上一掉，就只有結束條件（「發射所有彈藥時」）在晃，於是會生出
+        # **彈藥明明打光卻結束不了的模式**。
+        self._wc_ammo_full: int | None = None
 
         # 모드 지정 플래그: 수동 재장전으로 진입하는 weapon_change 모드를 쓰는가.
         # 진입에 필요한 재장전만 삽입하고 진입 후에는 삽입하지 않아 모드를 유지한다.
@@ -534,6 +541,7 @@ class CharState:
                 self._in_weapon_change = True
                 self._wc_shots = 0
                 self._wc_new_session = True
+                self._wc_ammo_full = None   # 進入的當下重新量測
             # 자기 탄창을 관리하는 모드(지속형 + 유한 장탄)만 모드 안에서 재장전을 완료시킨다.
             # 처리하지 않으면 장탄 소진 후 재장전이 끝나지 않아 발사가 영원히 멈춘다.
             # 시한부 모드(duration 있음)나 무한 장탄 모드는 기존 동작을 유지한다 —
@@ -1341,12 +1349,11 @@ class CharState:
 
         # 실효 최대 장탄. 스킬 텍스트에 `(사용 무기 변경 시 최대 장탄 수 효과 갱신)`이 있는
         # 무기 변경만 최대 장탄 수 버프를 받는다(`max_ammo_buff_applies`). 문구가 없으면 표기 고정.
+        # 判斷只由 `_full_ammo()` 一處負責 —— 裝填與彈藥充填的上限必須看到同一個值。
         if wc_max_ammo == -1:
             wc_ammo_full = 999999
-        elif wc_eff.get("max_ammo_buff_applies"):
-            wc_ammo_full = self._full_ammo(bm, t)   # self.weapon이 변경 무기로 교체된 상태
         else:
-            wc_ammo_full = wc_max_ammo
+            wc_ammo_full = self._full_ammo(bm, t)   # self.weapon이 변경 무기로 교체된 상태
 
         if wc_fire_mode == "charge":
             # 세션에 새로 들어왔으면 **차지 상태와 무관하게** 모드의 탄창을 채운다.
@@ -1828,17 +1835,41 @@ class CharState:
         # 여기서 표기값으로 끊어 버리면 `_change_weapon`이 이 플래그를 보고 부르는 자리까지
         # 같이 끊겨, 라플라스 : 얼티밋 히어로가 장탄을 아무리 올려도 모드가 120발에서
         # 멈췄다 — 「모든 탄환 발사 = 모드 종료」라 그 발수가 곧 딜인 캐릭터다.
-        base = self.weapon["max_ammo"]
         wc_eff = bm.get_weapon_change(self.name)
+        base_override: int | None = None
         if wc_eff is not None:
             wc_max = wc_eff.get("max_ammo", -1)
             if wc_max != -1:
+                # 게이지 연동 모드(E.H. `인 투 더 헤븐`)는 **진입 시 스냅샷**이 곧 실효 장탄이다
+                # —— 표기 장탄 4발은 상한일 뿐이고 실제로는 그때 들고 있던 `사제 탄창` 수만큼만
+                # 들어간다. 이 스냅샷도 `_wc_ammo_full`과 같은 "채우는 사건에만 다시 잰다"
+                # 규약을 따르므로(`_wc_dynamic_ammo`) 같은 창구에서 돌려준다. 스냅샷 전에
+                # 불리면 아래로 떨어져 표기값을 준다 —— 종전 동작 그대로다.
+                if wc_eff.get("max_ammo_gauge_ref") and self._wc_dynamic_ammo is not None:
+                    return self._wc_dynamic_ammo
                 if not wc_eff.get("max_ammo_buff_applies"):
                     return int(wc_max)
+                # 有括號句的模式，值要**沿用「填滿彈藥那一刻」量到的**，不是每次呼叫重算
+                # —— 見 `_wc_ammo_full` 的宣告註解。
+                if self._wc_ammo_full is not None:
+                    return self._wc_ammo_full
                 # `self.weapon`이 모드 무기로 바뀌어 있든 아니든 같은 값이 나오게 못 박는다
                 # — 부르는 자리마다 교체 여부가 달라 밑값이 흔들리면 안 된다.
-                base = int(wc_max)
+                base_override = int(wc_max)
+        full = self._buffed_ammo(bm, t, base_override)
+        if base_override is not None:
+            self._wc_ammo_full = full   # 這個 session 期間固定
+        return full
+
+    def _buffed_ammo(self, bm: BuffManager, t: float, base: int | None = None) -> int:
+        """在 `base`（不給就是武器基本彈藥）之上疊最大彈藥增益後的實效彈藥。
+
+        和 `_full_ammo()` 的差別是**不看武器變更模式** —— 模式結束時要填回原武器的滿彈，
+        那時候模式效果還沒被移除，呼叫 `_full_ammo()` 會拿到模式的彈藥數。
+        """
         buffs = bm.get_buffs(self.name, "__enemy__", t)
+        if base is None:
+            base = self.weapon["max_ammo"]
         # 장탄 % 버프는 소스(장비 옵션 단계·큐브·소장품·스킬 버프)마다 따로 발수로
         # 반올림한 뒤 더한다 — 합산 후 한 번 반올림하면 조합에 따라 1발씩 어긋난다.
         ammo_gain = int(_quant_sum(base, buffs, "max_ammo_pct", 1.0))
@@ -1857,6 +1888,8 @@ class CharState:
         — 오토는 3연속으로 끝까지 굴린다. 엄폐를 끊어 1/3·2/3만 채우고 나오는 컨트롤은
         아직 표현하지 않는다.
         """
+        # 裝填完成是重新量測實效彈藥的兩個事件之一（GAMEPLAY §무기 메카닉）。
+        self._wc_ammo_full = None
         full = self._full_ammo(bm, t)
         if self._is_clip_reload(bm):
             self.ammo = min(full, self.ammo + self._clip_gain(full))
@@ -1881,6 +1914,7 @@ class CharState:
     def _auto_reload(self, t: float, bm: BuffManager):
         """엄폐 니케의 딜레이 중 자동재장전. 장탄을 최대로 채우고 event:full_reload 발동.
         post_reload_delay는 적용하지 않음 (재장이 post_fire_delay 안에서 끝남)."""
+        self._wc_ammo_full = None   # 裝填完成 —— 重新量測實效彈藥
         self.ammo = self._full_ammo(bm, t)
         bm.notify("event:full_reload", t, self.name)
         if self._sim_log is not None:
