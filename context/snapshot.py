@@ -131,7 +131,11 @@ SQUADS: dict[str, dict] = {
     },
     "레이드_헬름아쿠아스노우": {
         # 커버: 헬름 : 아쿠아마린, 스노우 화이트, 에이드 : 에이전트 바니
+        # `optimal_range_weapons`: 에이드 : 에이전트 바니가 이 스쿼드의 유일한 SR이다.
+        # 적정 사거리에서 쏘는 자리이므로 명시한다(유저 확인) — 스킬 1·2의 아군 버프가
+        # `optimal_range` condition을 달고 있어, 안 적으면 통째로 무발동이다.
         "members": ["미란다", "헬름 : 아쿠아마린", "에이드 : 에이전트 바니", "스노우 화이트", "에이다"],
+        "enemy": {"optimal_range_weapons": ["SR"]},
         "config": {"first_burst_time": 3.0},
         "seed": 42,
     },
@@ -174,7 +178,11 @@ SQUADS: dict[str, dict] = {
     },
     "레이드_아니스서머메이든": {
         # 커버: 아니스 : 스파클링 서머, 메이든 : 아이스 로즈
+        # `optimal_range_weapons`: 에이드 : 에이전트 바니가 이 스쿼드의 유일한 SR이다.
+        # 적정 사거리에서 쏘는 자리이므로 명시한다(유저 확인) — 스킬 1·2의 아군 버프가
+        # `optimal_range` condition을 달고 있어, 안 적으면 통째로 무발동이다.
         "members": ["목단", "에이드 : 에이전트 바니", "아니스 : 스파클링 서머", "메이든 : 아이스 로즈", "프리바티"],
+        "enemy": {"optimal_range_weapons": ["SR"]},
         "config": {"first_burst_time": 3.0},
         "seed": 42,
     },

@@ -1620,8 +1620,11 @@ class BuffManager:
         if timing.startswith("squad_burst_cast:") and event.startswith("squad_burst_cast:"):
             return timing == event
 
-        # core_hit:N  (trigger_count_reduce 버프로 N 감소 가능)
-        if timing.startswith("core_hit:") and event == "core_hit":
+        # core_hit:N · core_hit_count:N  (trigger_count_reduce 버프로 N 감소 가능)
+        # `_timing_to_index_key()`가 둘 다 "core_hit"로 접는다. 파싱 정본 표기는
+        # `core_hit_count:N`이므로(`context/PARSING.md`) 여기서 둘 다 받아야 한다 —
+        # 한쪽만 있으면 그 표기를 쓰는 효과가 조용히 **영구 미발동**이 된다.
+        if (timing.startswith("core_hit:") or timing.startswith("core_hit_count:")) and event == "core_hit":
             raw = timing.split(":")[1]
             if not raw.lstrip("-").isdigit(): return False
             n = int(raw)
@@ -1833,6 +1836,17 @@ class BuffManager:
                 has = any(burst_stages.get(n) == "1" for n in self.squad_names if n != caster)
                 if has:
                     return False
+            elif cond in ("has_defender_ally", "no_defender_ally"):
+                # 자신 제외 스쿼드에 방어형 아군이 있는가. `parsed_nikke["class"]`로 판정한다
+                # (스쿼드 구성은 전투 중 안 바뀌므로 _RUNTIME_COND_PREFIXES 대상이 아니다).
+                # **두 조건을 한 분기에서 함께** 본다 — 같은 원문의 배타 분기라
+                # 한쪽만 구현하면 나머지 한쪽이 무조건 통과해 양쪽이 동시에 성립한다.
+                has = any(
+                    _NIKKE.get(n, {}).get("class") == "방어형"
+                    for n in self.squad_names if n != caster
+                )
+                if has != (cond == "has_defender_ally"):
+                    return False
             elif cond.startswith("gauge_above:"):
                 parts = cond.split(":")
                 gauge_id, threshold = parts[1], float(parts[2])
@@ -1928,6 +1942,15 @@ class BuffManager:
                 # 기본공격의 코어히트는 명중률·탄착군 확률이지만, 이 condition이 붙은 스킬은
                 # "코어가 활성화된 적"을 대상으로 하는 확정 발동이다.
                 if float(self.state.get("enemy", {}).get("core_px", 0) or 0) < 1:
+                    return False
+            elif cond == "optimal_range":
+                # 적정 사거리 여부의 정본은 `enemy["optimal_range_weapons"]`다 —
+                # ③ 고정 +30%를 태우는 것과 같은 판정을 쓴다(damage `is_optimal_range`).
+                # 기본값이 빈 목록이므로 스쿼드 스펙이 무기군을 명시하지 않으면 무발동이다.
+                # 무기 유형은 로스터 값을 본다(무기 변경 모드는 반영하지 않는다 —
+                # 지금 이 조건을 쓰는 캐릭터에 모드 전환이 없다).
+                wt = _NIKKE.get(caster, {}).get("weapon_type")
+                if wt not in (self.state.get("enemy", {}).get("optimal_range_weapons") or []):
                     return False
             # 나머지 condition은 get_buffs에서 재평가
         return True
@@ -3662,6 +3685,13 @@ class BuffManager:
             cls = target.split(":")[1]
             cls = {"공격": "화력형", "방어": "방어형", "지원": "지원형"}.get(cls, cls)
             return [n for n in self.squad_names if _NIKKE[n]["class"] == cls]
+        # "자신을 제외한 [코드] 아군 전체" — 시전자 포함판(`allies_code:`)과 원문이 갈린다.
+        # 메이든 : 아이스 로즈 `블레스 유`는 아군판과 자기판이 배타 분기라, 시전자를 빼지
+        # 않으면 MP≥1 사이클에 **자기가 양쪽을 다** 받는다.
+        if target.startswith("allies_code_excl_self:"):
+            code = target.split(":")[1]
+            return [n for n in self.squad_names
+                    if _NIKKE[n].get("element_code") == code and n != caster]
         if target.startswith("allies_code:"):
             code = target.split(":")[1]
             return [n for n in self.squad_names if _NIKKE[n].get("element_code") == code]

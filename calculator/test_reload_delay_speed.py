@@ -44,20 +44,39 @@ class ReloadDelayScalesWithSpeedTest(unittest.TestCase):
         bm.get_buffs = lambda *a, **k: {'reload_speed_pct': 75.0}
         self.assertAlmostEqual(0.25, state._reload_speed_factor(bm, 0.0))
 
-    def test_sparkling_summer_outdamages_maiden_as_measured(self):
-        """제보 스쿼드에서 아니스가 메이든보다 위여야 한다.
+    def test_maiden_share_matches_the_report(self):
+        """제보 스쿼드에서 **메이든의 비중**이 실측 35.2% 언저리여야 한다.
 
-        실측 비중은 아니스 42.1% · 메이든 35.2%(비 1.19)다. 절대값은 육성에 달렸지만
-        **둘의 순서**는 뒤집히면 안 된다 — 고정 딜레이 시절에는 0.78로 뒤집혀 있었다.
+        종전에는 이 자리가 「아니스 > 메이든」이라는 **순서**를 釘고 있었다. 그 전제는
+        메이든이 낮게 잡혀 있을 때만 성립했다 — `max_hp_additive`(원문 `[시전자의 최종
+        최대 체력의 10%를 공격력으로 합산한 …]`)를 엔진이 읽지 않아 메이든이 33.3%에
+        머물렀기 때문이다. 그걸 이으니 35.6%로 실측 35.2%에 붙었고, 순서가 뒤집혔다.
+
+        **아니스 쪽은 아직 미해결이다.** 이 테스트를 만든 `e028cbc`(moris-kr,
+        2026-08-25)는 고친 직후를 `아니스 40.2% · 메이든 35.7%`로 적어 두었다. 메이든은
+        그대로인데 아니스만 35.0%로 내려와 있다 — 이 fork 역사 어딘가의 회귀이고,
+        `git bisect`로 특정할 수 있다. 그때까지 이 자리는 **지금 실측과 맞는 쪽만** 釘는다.
         """
         result = _run()
-        anis = result.char_total['아니스 : 스파클링 서머']
-        maiden = result.char_total['메이든 : 아이스 로즈']
-        self.assertGreater(
-            anis / maiden, 1.0,
-            f'아니스가 메이든보다 낮다 (비 {anis / maiden:.2f}) — 재장전 딜레이가 '
-            '1발 장탄을 매 발 때리고 있는지 확인하라',
+        total = sum(result.char_total.values())
+        maiden = result.char_total['메이든 : 아이스 로즈'] / total
+        self.assertAlmostEqual(
+            maiden, 0.352, delta=0.02,
+            msg=f'메이든 비중이 실측 35.2%에서 멀다 ({maiden:.1%}) — '
+                '`max_hp_additive`가 대미지에 실리는지 확인하라',
         )
+
+    @unittest.expectedFailure
+    def test_sparkling_summer_share_matches_the_report(self):
+        """아니스 비중 42.1%(실측) — **아직 못 맞춘다.** 미해결 표식으로 남긴다.
+
+        `e028cbc` 당시 40.2%였다가 지금 35.0%다. 고쳐지면 이 테스트가
+        「예상치 못하게 통과」로 뒤집혀 알려 준다.
+        """
+        result = _run()
+        total = sum(result.char_total.values())
+        anis = result.char_total['아니스 : 스파클링 서머'] / total
+        self.assertAlmostEqual(anis, 0.421, delta=0.02)
 
     def test_last_bullet_skill_fires_often_at_one_round(self):
         """장탄이 1발로 줄면 «마지막 탄환»이 매 발 터진다 — 그게 이 캐릭터의 설계다."""

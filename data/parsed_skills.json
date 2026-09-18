@@ -1431,7 +1431,7 @@
         ],
         "condition": []
       },
-      "target": "all_enemies",
+      "target": "self",
       "stat": "taunt",
       "polarity": "neutral",
       "duration_values": {
@@ -2816,7 +2816,7 @@
           "gauge_above:MP:1"
         ]
       },
-      "target": "allies_code:전격",
+      "target": "allies_code_excl_self:전격",
       "stat": "element_bonus_pct",
       "polarity": "beneficial",
       "values": {
@@ -2845,7 +2845,7 @@
           "gauge_above:MP:1"
         ]
       },
-      "target": "allies_code:전격",
+      "target": "allies_code_excl_self:전격",
       "stat": "atk_caster_based_pct",
       "polarity": "beneficial",
       "values": {
@@ -4818,7 +4818,7 @@
         ],
         "condition": []
       },
-      "target": "all_enemies",
+      "target": "self",
       "stat": "taunt",
       "polarity": "neutral",
       "max_stack": 1,
@@ -4967,7 +4967,7 @@
         ],
         "condition": []
       },
-      "target": "all_enemies",
+      "target": "self",
       "stat": "taunt",
       "polarity": "neutral",
       "max_stack": 1,
@@ -9022,7 +9022,9 @@
         "timing": [
           "full_burst_start"
         ],
-        "condition": []
+        "condition": [
+          "target_code:풍압"
+        ]
       },
       "target": "enemies_code:풍압",
       "stat": "received_dmg_pct",
@@ -9075,7 +9077,9 @@
         "timing": [
           "on_attack_count:10"
         ],
-        "condition": []
+        "condition": [
+          "target_code:풍압"
+        ]
       },
       "target": "enemies_lowest_hp_code:풍압:1",
       "stat": "received_dmg_pct",
@@ -9297,15 +9301,15 @@
       "max_stack": 1,
       "values": {
         "1": 36.96,
-        "2": 40.32,
-        "3": 43.68,
-        "4": 47.04,
-        "5": 50.4,
-        "6": 53.76,
-        "7": 57.12,
-        "8": 60.48,
-        "9": 63.84,
-        "10": 67.2
+        "2": 39.8,
+        "3": 42.64,
+        "4": 45.49,
+        "5": 48.33,
+        "6": 51.17,
+        "7": 54.01,
+        "8": 56.86,
+        "9": 59.7,
+        "10": 62.54
       },
       "duration": 10
     },
@@ -9325,15 +9329,15 @@
       "max_stack": 1,
       "values": {
         "1": 36.96,
-        "2": 39.8,
-        "3": 42.64,
-        "4": 45.49,
-        "5": 48.33,
-        "6": 51.17,
-        "7": 54.01,
-        "8": 56.86,
-        "9": 59.7,
-        "10": 62.54
+        "2": 40.32,
+        "3": 43.68,
+        "4": 47.04,
+        "5": 50.4,
+        "6": 53.76,
+        "7": 57.12,
+        "8": 60.48,
+        "9": 63.84,
+        "10": 67.2
       },
       "duration": 20
     }
@@ -10126,7 +10130,9 @@
         "timing": [
           "full_charge_hit"
         ],
-        "condition": []
+        "condition": [
+          "optimal_range"
+        ]
       },
       "target": "all_allies",
       "stat": "atk_caster_based_pct",
@@ -10171,7 +10177,9 @@
         "timing": [
           "full_charge_hit"
         ],
-        "condition": []
+        "condition": [
+          "optimal_range"
+        ]
       },
       "target": "all_allies",
       "stat": "pierce_dmg_pct",
@@ -13223,7 +13231,9 @@
         "timing": [
           "hit_count:불안정 에너지:1"
         ],
-        "condition": []
+        "condition": [
+          "target_code:전격"
+        ]
       },
       "target": "enemies_code:전격",
       "stat": "received_dmg_pct",
@@ -13677,7 +13687,7 @@
           "burst_enter:3"
         ],
         "condition": [
-          "self_stack_above:골든 칩:9"
+          "self_stack_above:골든 칩:10"
         ]
       },
       "target": "all_allies",
@@ -13695,7 +13705,7 @@
           "burst_enter:3"
         ],
         "condition": [
-          "self_stack_above:골든 칩:19"
+          "self_stack_above:골든 칩:20"
         ]
       },
       "target": "all_allies",
@@ -13794,7 +13804,7 @@
           "burst_cast"
         ],
         "condition": [
-          "self_stack_above:골든 칩:19"
+          "self_stack_above:골든 칩:20"
         ]
       },
       "target": "self",
@@ -13823,7 +13833,7 @@
           "burst_cast"
         ],
         "condition": [
-          "self_stack_above:골든 칩:29"
+          "self_stack_above:골든 칩:30"
         ]
       },
       "target": "self",
@@ -14278,7 +14288,7 @@
     {
       "source": "스킬3",
       "type": "weapon_change",
-      "name": "레드 울프 무기변경",
+      "name": "레드 울프",
       "trigger": {
         "timing": [
           "squad_burst_cast:3"
@@ -14301,14 +14311,12 @@
       },
       "max_ammo": -1,
       "full_charge_mult": 250,
-      "duration": 10,
-      "post_fire_delay": 0.3,
-      "cover_during_delay": false
+      "duration": 10
     },
     {
       "source": "스킬3",
       "type": "buff",
-      "name": "레드 울프",
+      "name": "레드 울프 2",
       "trigger": {
         "timing": [
           "squad_burst_cast:3"
@@ -14324,7 +14332,7 @@
     {
       "source": "스킬3",
       "type": "buff",
-      "name": "레드 울프 2",
+      "name": "레드 울프 3",
       "trigger": {
         "timing": [
           "squad_burst_cast:3"
@@ -40848,7 +40856,7 @@
         ],
         "condition": []
       },
-      "target": "all_enemies",
+      "target": "self",
       "stat": "taunt",
       "polarity": "neutral",
       "max_stack": 1,
@@ -41174,7 +41182,7 @@
         ],
         "condition": []
       },
-      "target": "all_enemies",
+      "target": "self",
       "stat": "taunt",
       "polarity": "neutral",
       "max_stack": 1,
@@ -41432,7 +41440,7 @@
         ],
         "condition": []
       },
-      "target": "all_enemies",
+      "target": "self",
       "stat": "taunt",
       "polarity": "neutral",
       "max_stack": 1,
@@ -43664,7 +43672,7 @@
         ],
         "condition": []
       },
-      "target": "all_enemies",
+      "target": "self",
       "stat": "taunt",
       "polarity": "neutral",
       "max_stack": 1,
