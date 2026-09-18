@@ -52,6 +52,12 @@ def _get_skill_lv(char: dict, eff: dict) -> str:
 
 _NIKKE = _load(os.path.join(_DATA_DIR, "parsed_nikke.json"))
 _PARSED_SKILLS = _load(os.path.join(_DATA_DIR, "parsed_skills.json"))
+_BURST_GAUGE   = _load(os.path.join(_DATA_DIR, "burst_gauge.json"))
+
+# {캐릭터: {스킬명: {"burst_energy": 히트당 %}}} — 무기값과 다른 버충 계수를 갖는 스킬.
+# 값의 근거·신뢰등급은 data/burst_gauge.json의 `_note`,
+# 정본은 context/mechanics/버스트 게이지.md.
+BURST_GAUGE_EXCEPTIONS: dict = _BURST_GAUGE.get("_exceptions", {})
 
 FAVORITE_MAX_STAGE = 3          # 애장품 단계는 0(미보유)~3
 
@@ -168,7 +174,9 @@ _BUFFS_ZERO: dict[str, Any] = {
     "skill_cooldown_pct": 0.0,  # 스킬 쿨타임 % 감소 (음수 = 감소)
     "charge_speed_overflow_conversion_pct": 0.0,  # charge_speed 100% 초과분 × N% → charge_dmg_pct 추가
     "mg_warmup_speed_pct": 0.0,  # MG 예열 진행 속도 % (음수 = 감소). -100이면 warmup_shots 증가 정지
-    "burst_charge_speed_pct": 0.0,  # 버스트 게이지 충전 속도 %. 모든 게이지 가산에 곱연산
+    # 「버스트 충전 속도」는 수령자와 무관하게 시전자의 발당 기준 게이지 × 버프값을
+    # 매 히트에 가산한다. 정본: context/mechanics/버스트 게이지.md.
+    "burst_charge_speed_flat": 0.0,  # 모든 시전자가 주는 히트당 게이지 가산량(%p)
 }
 
 # parsed_skills stat → buffs 딕셔너리 키 매핑
@@ -239,7 +247,8 @@ _STAT_TO_BUFF: dict[str, str] = {
     "mg_warmup_speed_pct": "mg_warmup_speed_pct",
     # 2024-12-05에 `버스트 게이지 획득량` → `버스트 게이지 충전 속도`로 **표기만** 바뀌었다.
     # 별개 메커니즘이 아니므로 stat도 하나다.
-    "burst_charge_speed_pct": "burst_charge_speed_pct",
+    # `_route_burst_charge()`가 시전자의 CDN 발당 기준값으로 환산한다.
+    "burst_charge_speed_pct": "burst_charge_speed_flat",
 }
 
 # 크리확률로 합산되는 stat 집합 (백분율 → 확률 환산 후 기본 15%와 합연산)
@@ -2901,7 +2910,44 @@ class BuffManager:
             return False
         if ab.bullets_left != -1 or ab.bullets_per_target:
             return False
+        if eff.get("stat") == "burst_charge_speed_pct":
+            # 그 시전자가 일반 공격을 명중시켰는지에 따라 참조값이 바뀐다.
+            # 계획에 접으면 전투 시작 시점의 값이 그대로 굳는다.
+            return False
         return True
+
+    def _route_burst_charge(self, ab: ActiveBuff,
+                            buff_key: str, val: float) -> tuple[str, float]:
+        """같은 버충속 값을 시전자 기준 게이지로 환산한다.
+
+        버프 수령자가 시전자 본인인지 아군인지는 가르지 않는다. 시전자가 일반 공격을
+        한 번도 명중시키지 않았으면 CDN `(발당)`, 한 번이라도 명중시켰으면 `(대상)`을
+        참조해 히트당 고정 가산량으로 바꾼다. 전환 상태는 게이지 초기화와 무관하게
+        전투 끝까지 유지된다. 정본: context/mechanics/버스트 게이지.md.
+        """
+        if buff_key != "burst_charge_speed_flat":
+            return buff_key, val
+        weapon = _NIKKE.get(ab.caster, {})
+        if ab.caster in self.state.get("normal_attack_landed", ()):
+            reference = weapon.get("burst_energy", 0.0)
+        else:
+            reference = weapon.get("burst_energy_raw", weapon.get("burst_energy", 0.0) / 2.0)
+        return buff_key, reference * val / 100.0
+
+    def mark_normal_attack_landed(self, caster: str) -> None:
+        """일반 공격 첫 명중을 기록하고 버충속 집계 캐시를 갱신한다.
+
+        충전 창 밖(풀버스트 중) 명중과 구조물 명중도 전환을 일으킨다는 인게임 확인에
+        따라 게이지 가산 성공 여부는 보지 않는다. 현재 시뮬에는 구조물 대상이 없으므로
+        일반 공격 히트 경로가 적과 구조물을 대표한다.
+
+        캐시 무효화는 상태가 실제로 바뀌는 첫 발에서만 한다 — 매 발 부르면 버프 집계
+        캐시가 통째로 죽는다.
+        """
+        landed = self.state.setdefault("normal_attack_landed", set())
+        if caster not in landed:
+            landed.add(caster)
+            self._invalidate_buffs_cache()
 
     def _plan_step(self, ab: ActiveBuff, caster: str, target: str,
                    exclude_names: frozenset[str]) -> tuple | None:
@@ -2945,6 +2991,7 @@ class BuffManager:
         val = self._get_value(eff, ab, actual_recipient, stack_override=None)
         if val is None:
             return None
+        buff_key, val = self._route_burst_charge(ab, buff_key, val)
         if stat in _CRIT_RATE_STATS:
             # key 자리에 「일반 공격 한정인가」를 싣는다 — 스킬 딜용 합에서 뺄 기여를 가린다
             return (_PLAN_CRIT, stat in _NORMAL_ATK_ONLY_CRIT_RATE_STATS, val / 100)
@@ -3113,6 +3160,7 @@ class BuffManager:
             val = self._get_value(eff, ab, actual_recipient, stack_override=char_stack)
             if val is None:
                 continue
+            buff_key, val = self._route_burst_charge(ab, buff_key, val)
 
             if stat in _CRIT_RATE_STATS:
                 crit_rate_parts.append(val / 100)

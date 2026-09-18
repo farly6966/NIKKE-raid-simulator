@@ -154,13 +154,86 @@ class ChargingWindowTest(unittest.TestCase):
 
 
 class ChargeSpeedTest(unittest.TestCase):
-    def test_burst_charge_speed_pct_scales_the_gain(self):
-        """충전 속도 %는 가산 전체에 곱연산이다."""
+    """「버스트 충전 속도」는 **시전자 기준 히트당 고정 가산**이다.
+
+    표기는 %지만 곱연산이 아니다. 버프를 건 사람의 CDN 발당 게이지를 기준값으로 삼아
+    `기준값 × 버프값 / 100`을 **수령자의 매 히트에** 더한다. 수령자가 본인이든 아군이든
+    같은 식이고, 기준값만 시전자가 일반 공격을 명중시켰는지에 따라 갈린다 —
+    명중 전 `(발당)`, 명중 후 `(대상)`. 정본: context/mechanics/버스트 게이지.md.
+    """
+
+    def test_flat_addition_per_hit(self):
         from calculator.timeline import CharState
 
         cs = CharState(build_squad(["목단"])[0], 100000.0, "")
         self.assertAlmostEqual(cs._burst_gain({}, 1), 0.5)
-        self.assertAlmostEqual(cs._burst_gain({"burst_charge_speed_pct": 50.0}, 1), 0.75)
+        self.assertAlmostEqual(cs._burst_gain({}, 4), 2.0)
+        # 가산항은 히트 수만큼 붙고, 무기값·풀차지 배율과 섞이지 않는다.
+        self.assertAlmostEqual(cs._burst_gain({"burst_charge_speed_flat": 0.1}, 1), 0.6)
+        self.assertAlmostEqual(cs._burst_gain({"burst_charge_speed_flat": 0.1}, 4), 2.4)
+
+    def test_skill_exception_value_overrides_the_weapon_value(self):
+        """`burst_gauge.json` `_exceptions`가 무기값 대신 들어간다."""
+        from calculator.buff_manager import BURST_GAUGE_EXCEPTIONS
+        from calculator.timeline import CharState
+
+        expected = BURST_GAUGE_EXCEPTIONS["라피 : 레드 후드"]["부착형 유탄 4"]["burst_energy"]
+        cs = CharState(build_squad(["라피 : 레드 후드"])[0], 100000.0, "")
+        self.assertAlmostEqual(cs._burst_gain({}, 1, burst_energy=expected), expected)
+        self.assertNotAlmostEqual(cs._burst_gain({}, 1), expected)
+
+    def test_reference_switches_on_first_normal_attack_hit(self):
+        """명중 전에는 `(발당)`, 명중 뒤에는 `(대상)`을 기준으로 환산한다."""
+        from calculator.buff_manager import BuffManager, _NIKKE
+
+        squad = build_squad(["목단"], chars={
+            "목단": {"cube": {"name": "렐릭 퀀텀 큐브", "level": 15}},
+        })
+        bm = BuffManager(squad)
+        bm.battle_start(0.0)
+
+        raw = _NIKKE["목단"]["burst_energy_raw"]
+        tgt = _NIKKE["목단"]["burst_energy"]
+        self.assertAlmostEqual(tgt, raw * 2)   # CDN 전수에서 (대상) = (발당) × 2
+
+        before = bm.get_buffs("목단", "__enemy__", 1.0)["burst_charge_speed_flat"]
+        self.assertGreater(before, 0.0, "렐릭 퀀텀 큐브가 버프로 안 들어왔다")
+
+        bm.mark_normal_attack_landed("목단")
+        after = bm.get_buffs("목단", "__enemy__", 1.0)["burst_charge_speed_flat"]
+        self.assertAlmostEqual(after, before * 2)
+        # 환산식 자체도 확인한다 — 큐브 값 × 기준값 / 100.
+        cube_pct = after / tgt * 100.0
+        self.assertAlmostEqual(before, raw * cube_pct / 100.0)
+
+    def test_mark_is_idempotent(self):
+        """두 번째 명중은 아무것도 바꾸지 않는다 (캐시를 날리지도 않는다)."""
+        from calculator.buff_manager import BuffManager
+
+        bm = BuffManager(build_squad(["목단"]))
+        bm.battle_start(0.0)
+        bm.mark_normal_attack_landed("목단")
+        first = bm.get_buffs("목단", "__enemy__", 1.0)["burst_charge_speed_flat"]
+        bm.mark_normal_attack_landed("목단")
+        self.assertAlmostEqual(
+            bm.get_buffs("목단", "__enemy__", 1.0)["burst_charge_speed_flat"], first)
+
+    def test_ally_buff_uses_the_casters_reference_not_the_recipients(self):
+        """아군에게 걸어도 **건 사람의** 무기값이 기준이다 — 받는 쪽 무기값이 아니다."""
+        from calculator.buff_manager import BuffManager, _NIKKE
+
+        # 아니스 : 스타(RL, 발당 기준이 큼)가 스쿼드 전원에게 버충속을 건다.
+        squad = build_squad(["아니스 : 스타", "크라운", "리타", "도로시", "네온"])
+        bm = BuffManager(squad)
+        bm.battle_start(0.0)
+        flat = {n["name"]: bm.get_buffs(n["name"], "__enemy__", 1.0)["burst_charge_speed_flat"]
+                for n in squad}
+        givers = [n for n, v in flat.items() if v > 0.0]
+        self.assertTrue(givers, "아니스 : 스타의 버충속이 한 명도 안 받았다")
+        # 받는 사람들의 무기값은 제각각(MG 0.1 · SMG 0.2 · AR 0.4 · SG 0.9)인데
+        # 가산량은 전원 같다 — 기준이 시전자이기 때문이다.
+        self.assertEqual(len(set(round(flat[n], 12) for n in givers)), 1)
+        self.assertGreater(len({_NIKKE[n]["burst_energy"] for n in givers}), 1)
 
     def test_relic_quantum_cube_is_no_longer_unsupported(self):
         """렐릭 퀀텀 큐브가 실제 버프로 등록된다 — `unsupported`가 떨어졌다."""
@@ -172,7 +245,7 @@ class ChargeSpeedTest(unittest.TestCase):
         bm = BuffManager(squad)
         bm.battle_start(0.0)
         self.assertGreater(
-            bm.get_buffs("목단", "__enemy__", 1.0)["burst_charge_speed_pct"], 0.0)
+            bm.get_buffs("목단", "__enemy__", 1.0)["burst_charge_speed_flat"], 0.0)
 
 
 class CameraResolutionTest(unittest.TestCase):
