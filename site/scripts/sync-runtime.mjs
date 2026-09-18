@@ -29,6 +29,7 @@ const runtimeFiles = [
   'calculator/timeline.py',
   'context/spec.py',
   'context/growth.py',
+  'data/burst_gauge.json',
   'data/parsed_nikke.json',
   'data/parsed_skills.json',
   'data/char_defaults.json',
