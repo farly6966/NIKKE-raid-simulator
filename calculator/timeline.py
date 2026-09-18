@@ -2129,8 +2129,11 @@ class BurstController:
         self._phase: str = "idle"
         self._next_action_t: float = math.inf
         self._full_burst_end_t: float = -1.0
-        # 직전 풀버스트 시작 시각 (장전컨 정책 B의 사이클 주기 관측용)
+        # 다음 풀버스트 시작 예측 — **직전 사이클 주기 관측이 정답에 가장 가깝다.**
+        # 관측치가 없는 첫 사이클에만 쿨타임 사슬로 메운다(`_predict_next_fb_start()`).
         self._last_fb_start_t: float = -1.0
+        self._obs_next_fb: float = -1.0
+        self._cd_next_fb: float = -1.0    # 관측이 없는 동안 쓰는 쿨타임 기반 예측
 
         # 쿨타임 대기 중인 단계의 후보 목록 (대기가 아니면 None).
         # _next_action_t는 두 가지가 섞여 있다 — 의도된 딜레이(단계 전환 0.1s,
@@ -2185,6 +2188,16 @@ class BurstController:
                 regen = self.char_states[name].char.get("burst_regen_time", 2.0)
                 self.gauge_full_at[name] = charge_end(t, regen, self._gauge_blocked)
             self._burst_count += 1
+            # 관측이 아직 없는 사이클(= 첫 사이클)의 예측을 **여기서 한 번만** 낸다.
+            # 두 가지가 이 자리를 강제한다:
+            #   ① 값이 사이클 내내 고정이어야 한다. 매 틱 다시 내면 정책의 앵커가 계속
+            #      바뀌어 **「사이클당 1회」 가드가 무력화**되고 같은 엄폐가 연달아 열린다.
+            #   ② 첫 풀버스트 **전에는** 낼 수 없다. 그 구간을 정하는 건 쿨타임이 아니라
+            #      게이지인데(전투 시작 시점엔 전원 쿨이 0이다) 사슬은 게이지를 안 본다.
+            # 바로 위에서 `gauge_full_at`을 갱신했고 `_burst_count`도 올린 뒤라,
+            # 사슬이 보는 값은 전부 **다음** 사이클의 것이다.
+            if self._obs_next_fb <= 0.0:
+                self._cd_next_fb = self._predict_next_fb_start(t)
 
         # ── idle → 게이지 충전 완료 시 1단계 진입 ─────────────────────────
         _at_max = (self._max_burst_count is not None and self._burst_count >= self._max_burst_count)
@@ -2296,7 +2309,7 @@ class BurstController:
             # 시작 시각은 반응형(게이지·쿨)이라 확정할 수 없어 직전 주기로 예측한다.
             state["full_burst_end_t"] = self._full_burst_end_t
             if self._last_fb_start_t >= 0.0:
-                state["next_fb_start_pred"] = t + (t - self._last_fb_start_t)
+                self._obs_next_fb = t + (t - self._last_fb_start_t)
             self._last_fb_start_t = t
             bm._invalidate_buffs_cache()
             for n in self.squad_names:
@@ -2348,7 +2361,74 @@ class BurstController:
         state["burst_gauge_charging"] = (
             self._phase == "idle" and not self._in_gauge_block(t))
 
+        # ── 다음 풀버스트 시작 예측 ────────────────────────────────────────
+        # **관측이 있으면 관측이 이긴다.** 상류가 재 봤더니 직전 사이클 주기 외삽이
+        # 쿨타임 사슬보다 정확했다 — 사슬은 **앞으로 들어올 쿨감을 못 보기** 때문이다
+        # (`burst_cooldown_reduce`는 버프가 아니라 스킬이 뿌리는 즉시 효과라, 지금
+        # `burst_ready_at`을 읽어도 이번 사이클이 아직 뿌릴 몫은 그 값에 없다).
+        # 관측이 없는 동안만 사슬 값을 쓰고, 그 값은 풀버스트 종료 때 한 번 잡힌다.
+        # 정본: `context/CONTROL.md` §장전컨.
+        state["next_fb_start_pred"] = (
+            self._obs_next_fb if self._obs_next_fb > 0.0 else self._cd_next_fb)
+
         return events
+
+    def _predict_next_fb_start(self, t: float) -> float:
+        """다음 풀버스트가 시작할 시각. 없으면 `-1.0`. 정본: `context/CONTROL.md` §장전컨.
+
+        **남은 버스트 쿨타임으로 단계 사슬(1→2→3)을 앞으로 굴린다.** 종전에는 직전
+        사이클 주기를 다음에도 쓴다는 관측 외삽뿐이었고, 관측치가 없는 **첫 사이클에는
+        값이 아예 없어** 정책 B·`if_dry`가 한 사이클 통째로 걸리지 않았다. 쿨타임은
+        확정값이고(`burst_ready_at` — 쿨감까지 반영된 미래 시각) 전투 시작부터 있다.
+
+        **풀버스트가 끝나는 순간에만 불린다.** 그래서 `_phase`는 이미 `"idle"`이고
+        `gauge_full_at`·`_burst_count`는 다음 사이클 것으로 갱신된 뒤다. 진행 중인
+        사이클을 가정한 분기는 두지 않는다 — 불릴 일이 없는 분기는 검증되지 않는다.
+
+            열림   = 지금 (fixed면 게이지 만충 시각까지 미룬다) + burst_reaction
+            누름ₖ  = min over 후보 n ( max(열림ₖ, 쿨 해제[n]) )
+            열림ₖ₊₁ = 누름ₖ + burst_switch_delay + burst_reaction
+            예측   = 누름₃ + 0.05                  (switching → 풀버스트 진입 딜레이)
+
+        **`accumulate`에서는 게이지를 보지 않는다.** 실누적이라 확정값이 없다 —
+        게이지가 병목인 조합(충전이 긴 덱, §버충 컨트롤)에서는 **예측이 이르게 나온다.**
+        하한이라는 뜻이다. `fixed`는 게이지 제약이 `gauge_full_at`이라 확정값이므로 넣는다.
+        """
+        if (self._max_burst_count is not None
+                and self._burst_count >= self._max_burst_count):
+            return -1.0   # 상한에 닿았다 — 다음 풀버스트는 없다
+
+        at = t
+        if self._gauge_mode != "accumulate":
+            at = max(at, max(self.gauge_full_at.values()))
+        at += self._burst_reaction
+        for stage in ("1", "2", "3"):
+            cands = self._predict_candidates(stage)
+            if not cands:
+                return -1.0   # 그 단계를 쓸 사람이 없다 — 사이클이 영영 안 돈다
+            at = min(max(at, self.burst_ready_at.get(n, 0.0)) for n in cands)
+            if stage != "3":
+                at += self.config.get("burst_switch_delay", 0.1) + self._burst_reaction
+        return at + 0.05
+
+    def _predict_candidates(self, stage: str) -> list[str]:
+        """예측용 단계 후보. `_try_use_stage()`와 같은 출처를 쓰되 둘만 다르다.
+
+        - **패턴(`_pattern_rank`)은 보지 않는다.** 패턴은 후보를 빼는 게 아니라 뒤로
+          미는 것이라, "이 단계가 언제 넘어갈 수 있나"의 답은 후보 전체의 최솟값 그대로다.
+          다만 fork에는 「이번 사이클이 차례인 사람만 남긴다」는 `due` 좁히기가 있어,
+          패턴이 걸린 조합에서는 이 예측이 **이른 쪽으로** 틀린다(하한).
+        - **금지 목록은 본다.** 그쪽은 뒤로 미는 게 아니라 실제로 빼는 것이다.
+        """
+        if (self._burst_sequence is not None
+                and self._burst_count < len(self._burst_sequence)):
+            cands = self._burst_sequence[self._burst_count].get(stage, [])
+        else:
+            cands = self.burst_order.get(stage, [])
+        if self._strict_no_burst:
+            cands = [n for n in cands
+                     if n != self._no_burst_char and n not in self._no_burst_names]
+        return cands
 
     def _pattern_rank(self, name: str, cycle: int, t: float) -> int:
         """이번 사이클의 우선순위 등급. 낮을수록 먼저 쓴다 (`sorted`는 안정 정렬이라
