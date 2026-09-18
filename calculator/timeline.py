@@ -445,9 +445,15 @@ class CharState:
         # 재장전을 직접 거는 게 아니다 — 실행층은 아래 §컨트롤 실행층 참조.
         rl = control.get("reload") or {}
         self.reload_policy: str = rl.get("policy", "")
+        # 오타가 조용히 "정책 없음"으로 떨어지면 컨트롤을 켠 줄 알고 결과를 읽게 된다.
+        if self.reload_policy not in ("", "before_fb_end", "into_fb", "finish_by_fb_end"):
+            raise ValueError(
+                f"{self.name}: 모르는 reload.policy: {self.reload_policy!r}. "
+                f'"before_fb_end" · "into_fb" · "finish_by_fb_end" 중 하나여야 한다. '
+                f"context/CONTROL.md §장전컨")
         self.reload_lead: float = float(rl.get("lead", _RELOAD_LEAD_DEFAULT))
         self.reload_margin: float = float(rl.get("margin", _RELOAD_MARGIN_DEFAULT))
-        # 비버스트에 탄이 마를 때만 건다 (정책 A 전용). 남은 장탄으로 풀버스트 잔여
+        # 비버스트에 탄이 마를 때만 건다 (정책 A·C 전용). 남은 장탄으로 풀버스트 잔여
         # 구간 + 다음 비버스트 구간을 버틸 수 있으면 엄폐하지 않는다.
         self.reload_if_dry: bool = bool(rl.get("if_dry", False))
         # 엄폐 지속 시간(초). None이면 재장전이 끝나는 순간까지만 엄폐한다
@@ -1617,6 +1623,12 @@ class CharState:
         B `into_fb`       : 다음 풀버스트 시작 직후(`margin`초 뒤)에 재장전이 끝나도록
                             역산해서 시작. 시작 시각은 직전 사이클 주기로 예측한다.
                             완료가 시작보다 빠르면 최대장탄 증가 버프를 놓치므로 margin>0.
+        C `finish_by_fb_end`: 풀버스트가 **끝나기 전에 재장전이 끝나도록** 역산해서 시작.
+                            버스트 게이지 충전 창을 만탄으로 여는 조작이다 — 창이 2~5초라
+                            거기서 재장전이 걸리면 그 사이클의 버충이 통째로 날아간다.
+                            A와 달리 진입 시각이 `lead` 고정이 아니라 **그 시점의 실제
+                            재장전 시간**에서 나온다(A는 재장 0초 구간을 노리는 정책이라
+                            짧은 lead가 맞고, 이쪽은 재장전을 실제로 끝내야 한다).
         """
         if not self.reload_policy:
             return False
@@ -1638,6 +1650,18 @@ class CharState:
             if anchor <= 0:
                 return False  # 관측 주기가 없는 첫 사이클
             if t < anchor - (self._reload_total_duration(bm, t) - self.reload_margin):
+                return False
+        elif self.reload_policy == "finish_by_fb_end":
+            if not bm.state.get("full_burst", False):
+                return False
+            anchor = bm.state.get("full_burst_end_t", -1.0)
+            if anchor <= 0:
+                return False
+            # `margin`은 여기서 **종료 몇 초 전에 끝내 둘지**다 (B에서는 시작 몇 초 뒤).
+            # 정책마다 뜻이 다른 건 `lead`도 마찬가지다 — 표는 context/CONTROL.md §설정 스키마.
+            if t < anchor - (self._reload_total_duration(bm, t) + self.reload_margin):
+                return False
+            if self.reload_if_dry and not self._dry_before_next_fb(t, bm, anchor):
                 return False
         else:
             return False

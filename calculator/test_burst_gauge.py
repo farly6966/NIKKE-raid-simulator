@@ -304,6 +304,67 @@ class BurstChargeControlTest(unittest.TestCase):
             CharState(char, 100000.0, "")
 
 
+class ReloadPolicyCTest(unittest.TestCase):
+    """장전컨 정책 C `finish_by_fb_end` — 충전 창을 **만탄으로** 연다.
+
+    버충 컨트롤의 나머지 절반이다. 창은 2~5초뿐이라 거기서 재장전이 걸리면 그 사이클의
+    버충이 통째로 날아간다. A(`before_fb_end`)와 목적이 다르다 — A는 재장 0초 구간을
+    노리는 정책이라 `lead`가 상수여도 되지만, 이쪽은 **재장전을 실제로 끝내야** 하므로
+    진입 시각이 그 시점의 재장전 시간에서 나온다.
+    """
+
+    SQUAD = ["루주", "크라운", "마스트 : 로망틱 메이드", "신데렐라", "메이든 : 아이스 로즈"]
+
+    def _run(self, ctrl, duration=180):
+        chars = {"루주": {"control": ctrl}} if ctrl else None
+        return _run(self.SQUAD, {"duration": duration, "first_burst_time": 3.0}, chars=chars)
+
+    def test_unknown_policy_fails_loudly(self):
+        from calculator.timeline import CharState
+
+        char = build_squad(["루주"], chars={
+            "루주": {"control": {"reload": {"policy": "nope"}}},
+        })[0]
+        with self.assertRaises(ValueError):
+            CharState(char, 100000.0, "")
+
+    def test_reload_finishes_before_the_window_opens(self):
+        """재장전 **완료**가 풀버스트 종료보다 앞서야 정책이 제 일을 한 것이다."""
+        result = self._run({"reload": {"policy": "finish_by_fb_end"}}, duration=60)
+        ends = [e.t for e in result.log.burst_log if "full_burst 종료" in e.event]
+        self.assertTrue(ends)
+        starts = [e.t for e in result.log.reload_log
+                  if e.caster == "루주" and e.event == "엄폐 시작(장전컨)"]
+        dones = [e.t for e in result.log.reload_log
+                 if e.caster == "루주" and e.event == "재장전 완료"]
+        self.assertTrue(starts, "정책 C가 한 번도 안 걸렸다")
+
+        first_end = ends[0]
+        # 이 사이클의 엄폐는 풀버스트 종료 전에 시작하고,
+        entered = [t for t in starts if t < first_end]
+        self.assertTrue(entered, "풀버스트 종료 전에 엄폐하지 않았다")
+        # 재장전도 종료 전에 끝나 있어야 한다.
+        self.assertTrue(any(entered[0] <= t < first_end for t in dones),
+                        "창이 열리기 전에 재장전이 안 끝났다")
+
+    def test_policy_c_adds_a_full_burst_in_accumulate(self):
+        """만탄으로 창을 여는 만큼 사이클이 당겨진다."""
+        plain = self._run(None)
+        policy_c = self._run({"reload": {"policy": "finish_by_fb_end"}})
+
+        def bursts(r):
+            return sum(1 for e in r.log.burst_log if "full_burst 시작" in e.event)
+
+        self.assertGreater(bursts(policy_c), bursts(plain))
+        self.assertGreater(policy_c.squad_total, plain.squad_total)
+
+    def test_policy_c_is_opt_in(self):
+        """정책을 안 주면 아무 일도 일어나지 않는다 — 기존 baseline이 안 움직이는 근거다."""
+        plain = self._run(None)
+        self.assertEqual(
+            [e for e in plain.log.reload_log if e.event == "엄폐 시작(장전컨)"], [])
+
+
 class FixedModeTest(unittest.TestCase):
     """기본 모드는 종전 그대로다 — 게이지는 계산·기록만 하고 사이클을 판정하지 않는다."""
 
