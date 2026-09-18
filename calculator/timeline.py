@@ -148,9 +148,17 @@ DEFAULT_CONFIG: dict = {
     #   "accumulate" — 실누적. 게이지가 100%에 닿아야 1단계가 나간다.
     #                  burst_regen_time·first_burst_time을 **둘 다 무시한다**.
     "burst_gauge_mode":   "fixed",
-    # 카메라가 보고 있는 니케. 풀차지 게이지 배율은 **이 한 명에게만** 붙는다
-    # (2024-04-25 패치). None이면 컨트롤에서 유도한다 — _resolve_camera().
+    # 카메라가 보고 있는 니케. 풀차지 게이지 배율은 **카메라를 받은 니케에게만** 붙는다
+    # (2024-04-25 패치). None이면 컨트롤에서 유도한다 — _resolve_cameras().
+    # str 하나 · 이름 list · ""(아무도 안 봄) 를 받는다.
     "camera":             None,
+    # 카메라를 몇 명이 나눠 가질 수 있는가. 정본: context/CONTROL.md §카메라.
+    #   "single" — 정확히 1명(기본). 실제 게임의 제약이다.
+    #   "shared" — 컨트롤을 켠 전원이 받는다. 컨트롤 정책이 이미 "여러 명 동시 조작"을
+    #              비현실적 상한으로 허용하고 있어, 그 상한에 카메라만 혼자 1명으로
+    #              남아 있으면 조작과 카메라가 따로 논다. 같은 태도로 맞춘다.
+    # **버충 컨트롤은 모드와 무관하게 언제나 단독이다** — 아래 _resolve_cameras().
+    "camera_mode":        "single",
     "allow_unparsed":     False,  # True면 스킬 미파싱 캐릭터를 스킬 0개로 돌린다 (파싱 전 신캐 전용)
     # 난수(크리·코어히트) 처리 방식.
     #   "random"   — 히트마다 확률 판정(기본, 인게임과 동일한 분산)
@@ -411,6 +419,19 @@ class CharState:
             self._tap_charge = max(0.0, slack - _TAP_CUTTABLE_DELAY)
             self._tap_hold = _TAP_MIN_HOLD + self._tap_charge
             self.tap_fire = True
+        # 톡톡이를 **거는 구간**. 정본: context/CONTROL.md §버충 컨트롤.
+        #   "always"       — 전투 내내 (기본, 종전 동작)
+        #   "burst_charge" — 버스트 게이지 충전 창에서만. 창 밖에서는 평소대로 풀차지를
+        #                    쏜다. 게이지는 충전 창에서만 쌓이므로(`burst_gauge_charging`),
+        #                    "창 안에서는 발수, 창 밖에서는 배율"이라는 실전 조작이 된다.
+        self._tap_window: str = str((tap or {}).get("window", "always"))
+        if self._tap_window not in ("always", "burst_charge"):
+            raise ValueError(
+                f'{self.name}: tap_fire.window는 "always" 또는 "burst_charge"여야 한다: '
+                f"{self._tap_window!r}. context/CONTROL.md §버충 컨트롤")
+        # 이번 차지를 톡톡이로 칠지 — **차지 시작 시점에 래치**한다. 매 프레임 다시 보면
+        # 창 경계에서 한 발이 반쯤 톡톡이인 채로 갈라진다.
+        self._tap_this_shot: bool = False
         # 톡톡이 중 주기적으로 풀차지 한 발을 섞는다 — `풀 차지 공격 시` 버프를 유지하려고
         # 하는 조작이다. 논차지 샷은 `full_charge_hit`를 발동시키지 않으므로, 톡톡이만
         # 켜면 그 버프가 통째로 죽는다 (밀크 : 블루밍 바니 `관통 특화` 6초).
@@ -836,6 +857,20 @@ class CharState:
         return max(0.0, max(0.0, self.charge_time_base - cut)
                    + buffs.get("charge_time_flat", 0.0))
 
+    def _tap_window_open(self, bm: BuffManager) -> bool:
+        """이번 차지를 톡톡이로 칠 것인가. 정본: context/CONTROL.md §버충 컨트롤.
+
+        `window == "burst_charge"`면 **버스트 게이지 충전 창 안에서만** 참이다. 그 창은
+        `state["burst_gauge_charging"]`(= `BurstController._phase == "idle"`) 한 곳에서만
+        정의되고 게이지 가산이 쓰는 것과 같은 값이라, 톡톡이 구간과 충전 구간이 구조적으로
+        어긋날 수 없다. 전투 시작부터 첫 버스트까지도 충전 창이므로 그 구간도 포함된다.
+        """
+        if not self.tap_fire:
+            return False
+        if self._tap_window == "burst_charge":
+            return bool(bm.state.get("burst_gauge_charging", False))
+        return True
+
     def _tick_charge(self, t: float, bm: BuffManager, enemy: dict, cfg: dict) -> list[HitEvent]:
         events = []
 
@@ -852,6 +887,8 @@ class CharState:
             self._charge_start_t = t
             self._charge_phase = "charging"
             self._charge_hold_fired.clear()
+            # 이 발을 톡톡이로 칠지 여기서 한 번만 정한다 (`window` 판정).
+            self._tap_this_shot = self._tap_window_open(bm)
             # 이 발을 풀차지로 쏠지 여기서 정한다 (톡톡이 중 주기적 풀차지).
             self._force_full_charge = (
                 self.tap_full_charge_interval > 0
@@ -881,7 +918,7 @@ class CharState:
             # 톡톡이로 쏘다가 **본인 버스트 동안만** 풀차지를 들고 있는 조작이
             # 실제로 쓰인다(아인 + 에이다). 톡톡이가 늘 이기게 두면 홀드가 통째로
             # 죽어, 홀드를 얹은 조합이 톡톡이만 켠 것과 한 자리도 다르지 않았다.
-            if self.tap_fire and not self._force_full_charge and self._hold_release_t < 0:
+            if self._tap_this_shot and not self._force_full_charge and self._hold_release_t < 0:
                 # 톡톡이: 누르는 시간이 고정이고, 그중 사격 전 딜레이를 뺀 만큼만 차지된다.
                 # 차지속도 버프로 유효 차지 시간이 그 아래로 내려가면 풀차지 샷이 된다.
                 self._charge_end_t = self._charge_start_t + self._tap_hold
@@ -1076,7 +1113,7 @@ class CharState:
         # (펠릿은 SG뿐이라 여기선 1).
         bm.add_burst_gauge(
             self._burst_gain(buffs, self.pellets * self.muzzles,
-                             full_charge=(is_full and cfg.get("_camera") == self.name)),
+                             full_charge=(is_full and self.name in cfg["_camera"])),
             t, self.name,
             "weapon:full_charge" if is_full else "weapon")
         body_ev = "squad_part_hit" if enemy.get("has_parts", False) else "squad_body_hit"
@@ -1096,7 +1133,7 @@ class CharState:
         # 톡톡이는 **사격 후 딜레이를 줄이는 컨트롤이다** — 풀차지로 나갔든 아니든
         # 떼기 + 덜 지운 사격 후 딜레이만 기다린다. 그래서 차지속도 버프로 차지가 짧아진
         # 구간에서는 풀차지 샷을 초당 3~4발 낼 수 있다.
-        if self.tap_fire:
+        if self._tap_this_shot:
             self._post_delay_end_t = t + self._tap_release + self._tap_post
         else:
             self._post_delay_end_t = t + self.post_fire_delay
@@ -2549,31 +2586,71 @@ def _check_names(names: list[str], allow_unparsed: bool) -> None:
         )
 
 
-def _resolve_camera(squad: list[dict], cfg: dict) -> str:
-    """카메라가 보고 있는 니케를 정한다. 풀차지 게이지 배율이 붙는 **단 한 명**이다.
+def _burst_charge_carriers(squad: list[dict]) -> list[str]:
+    """버충 컨트롤(충전 창 한정 톡톡이)을 켠 캐릭터 목록. 정본: context/CONTROL.md §버충 컨트롤."""
+    return [c["name"] for c in squad
+            if ((c.get("control") or {}).get("tap_fire") or {}).get("window") == "burst_charge"]
 
-    `config["camera"]`가 명시되면 그것이 이긴다. 빈 문자열은 **아무도 보지 않는다**는
-    뜻이다(스쿼드에 없는 이름도 같다) — 유도로 떨어지지 않는다. 미지정(None)일 때만
-    컨트롤에서 유도한다:
 
-    - 컨트롤(`control`)을 켠 캐릭터가 **정확히 1명**이면 그 사람.
-      좌클릭·엄폐(shift)는 보고 있는 니케에만 걸리므로, 컨트롤을 준다는 것이
-      곧 카메라를 거기 둔다는 뜻이다.
-    - 그 외(0명이거나 2명 이상)는 **3번 자리**. 전투가 시작되면 카메라는 3번
-      자리에서 출발하고, 유저가 z·x·c·v·b로 1~5번을 오간다.
+def _resolve_cameras(squad: list[dict], cfg: dict) -> frozenset[str]:
+    """카메라를 받은 니케 집합. 풀차지 게이지 배율이 붙는 대상이다.
+
+    **버충 담당이 있으면 그 사람 하나로 끝난다 — `camera_mode`를 보지 않는다.**
+    충전 창은 2~5초뿐이고 그 안에서 한 명을 계속 클릭하는 조작이라 나눠 가질 수 없다.
+    카메라가 그 사람에게 묶이는 건 **버충 조작의 비용**이기도 하다 — 톡톡이는 논차지라
+    배율을 못 받으므로, 그 창에서 아무도 풀차지 배율을 못 받는다. 이걸 다른 니케에게
+    흘리면 있지도 않은 이득이 생긴다. 두 명 이상이면 즉시 실패한다(조용히 틀리지 않는다).
+
+    버충 담당이 없을 때만 `camera_mode`가 갈린다:
+
+    - `"single"`(기본) — 정확히 1명. 실제 게임의 제약이다.
+      `config["camera"]`가 명시되면 그것이 이긴다. 빈 문자열은 **아무도 보지 않는다**는
+      뜻이다(스쿼드에 없는 이름도 같다) — 유도로 떨어지지 않는다. 미지정(None)이면
+      컨트롤을 켠 캐릭터가 **정확히 1명**일 때 그 사람 (좌클릭·엄폐는 보고 있는 니케에만
+      걸리므로 컨트롤을 준다는 게 곧 카메라를 거기 둔다는 뜻이다).
+      그 외(0명·2명 이상)는 **3번 자리** — 전투가 시작되면 카메라는 거기서 출발하고
+      유저가 z·x·c·v·b로 1~5번을 오간다.
+    - `"shared"` — 컨트롤을 켠 **전원**이 받는다(없으면 3번 자리). 컨트롤 정책은 이미
+      "여러 명 동시 조작"을 비현실적 상한으로 허용하는데 카메라만 1명으로 남으면
+      조작과 카메라가 따로 논다. 상한을 쓰기로 했으면 카메라도 같이 올린다 —
+      **상한이지 실전값이 아니다.**
 
     효과는 `_charge_fire()`의 풀차지 배율 한 줄뿐이다 — 대미지·컨트롤 경로는
     이 값을 보지 않는다. 비차지 무기는 `full_charge_mult`가 없어 무영향이다.
     """
+    # 모드 검증은 버충 분기보다 **먼저** 한다 — 오타를 버충 담당 유무에 따라
+    # 잡았다 놓쳤다 하면 그게 더 나쁘다.
+    mode = cfg.get("camera_mode", "single")
+    if mode not in ("single", "shared"):
+        raise ValueError(
+            f'camera_mode는 "single" 또는 "shared"여야 한다: {mode!r}. context/CONTROL.md §카메라')
+
+    carriers = _burst_charge_carriers(squad)
+    if len(carriers) > 1:
+        raise ValueError(
+            f"버충 컨트롤은 한 명만 켤 수 있다 (카메라를 나눠 가질 수 없다): {carriers}. "
+            f"context/CONTROL.md §버충 컨트롤")
+    if carriers:
+        return frozenset(carriers)
+
     named = cfg.get("camera")
     if named is not None:
-        return named
+        names = [named] if isinstance(named, str) else list(named)
+        names = [n for n in names if n]
+        if mode == "single" and len(names) > 1:
+            raise ValueError(
+                f'camera_mode="single"에는 카메라를 한 명만 줄 수 있다: {names}. '
+                f'여러 명을 보려면 camera_mode="shared". context/CONTROL.md §카메라')
+        return frozenset(names)
+
     controlled = [c["name"] for c in squad if c.get("control")]
+    if mode == "shared" and controlled:
+        return frozenset(controlled)
     if len(controlled) == 1:
-        return controlled[0]
+        return frozenset(controlled)
     if len(squad) >= 3:
-        return squad[2]["name"]
-    return squad[0]["name"] if squad else ""
+        return frozenset({squad[2]["name"]})
+    return frozenset({squad[0]["name"]}) if squad else frozenset()
 
 
 def simulate(
@@ -2619,8 +2696,8 @@ def simulate(
         raise ValueError(
             f'burst_gauge_mode는 "fixed" 또는 "accumulate"여야 한다: '
             f'{cfg["burst_gauge_mode"]!r}')
-    # 풀차지 게이지 배율이 붙는 한 명. `_charge_fire()`가 cfg에서 읽는다.
-    cfg["_camera"] = _resolve_camera(squad, cfg)
+    # 풀차지 게이지 배율이 붙는 니케들. `_charge_fire()`가 cfg에서 읽는다.
+    cfg["_camera"] = _resolve_cameras(squad, cfg)
 
     base_stats: dict[str, dict] = {c["name"]: calc_base_stats(c) for c in squad}
 
@@ -2962,8 +3039,14 @@ def simulate(
         # 카메라는 풀차지 **게이지** 배율에만 쓰이므로 사이클을 판정하는 모드에서만 적는다
         # (만충 로그와 같은 이유 — "fixed" baseline 불변).
         if cfg["burst_gauge_mode"] == "accumulate":
+            # 스쿼드 순서로 적는다 — frozenset 순회 순서는 실행마다 달라질 수 있어
+            # 로그가 흔들리면 스냅샷 diff가 가짜로 뜬다.
+            _cams = [c["name"] for c in squad if c["name"] in cfg["_camera"]]
+            _who = " · ".join(_cams) if _cams else "없음"
+            if len(_cams) > 1:
+                _who += '  [camera_mode="shared" — 비현실적 상한]'
             sim_log.burst_log.append(BurstLogEntry(
-                t=0.0, event=f"카메라 초점: {cfg['_camera']}", caster=""))
+                t=0.0, event=f"카메라 초점: {_who}", caster=""))
 
     def _apply_lifesteal(ev: HitEvent, bm: BuffManager, base_stats: dict, t: float):
         buffs = bm.get_buffs(ev.caster, "__enemy__", t)

@@ -16,7 +16,7 @@
 """
 import unittest
 
-from calculator.timeline import simulate, _resolve_camera
+from calculator.timeline import simulate, _resolve_cameras
 from context.spec import build_config, build_squad
 
 
@@ -176,27 +176,132 @@ class ChargeSpeedTest(unittest.TestCase):
 
 
 class CameraResolutionTest(unittest.TestCase):
-    """카메라는 명시가 이기고, 미지정이면 컨트롤 → 3번 자리 순으로 유도한다."""
+    """카메라는 버충 담당 → 명시 → 컨트롤 → 3번 자리 순으로 정해진다."""
 
-    def _squad(self, controlled=()):
-        return [{"name": n, **({"control": {"tap": True}} if n in controlled else {})}
-                for n in ("A", "B", "C", "D", "E")]
+    def _squad(self, controlled=(), burst_charge=()):
+        out = []
+        for n in ("A", "B", "C", "D", "E"):
+            ctrl = {}
+            if n in controlled:
+                ctrl = {"tap_fire": {"rate": 3.0}}
+            if n in burst_charge:
+                ctrl = {"tap_fire": {"rate": 3.0, "window": "burst_charge"}}
+            out.append({"name": n, **({"control": ctrl} if ctrl else {})})
+        return out
 
     def test_explicit_name_wins(self):
-        self.assertEqual(_resolve_camera(self._squad(), {"camera": "D"}), "D")
+        self.assertEqual(_resolve_cameras(self._squad(), {"camera": "D"}), frozenset({"D"}))
 
     def test_empty_string_means_nobody(self):
         """빈 문자열은 «아무도 안 본다»는 뜻이다 — 유도로 떨어지지 않는다."""
-        self.assertEqual(_resolve_camera(self._squad(("B",)), {"camera": ""}), "")
+        self.assertEqual(_resolve_cameras(self._squad(("B",)), {"camera": ""}), frozenset())
 
     def test_single_control_takes_the_camera(self):
-        self.assertEqual(_resolve_camera(self._squad(("B",)), {}), "B")
+        self.assertEqual(_resolve_cameras(self._squad(("B",)), {}), frozenset({"B"}))
 
     def test_two_controls_fall_back_to_slot_three(self):
-        self.assertEqual(_resolve_camera(self._squad(("B", "D")), {}), "C")
+        self.assertEqual(_resolve_cameras(self._squad(("B", "D")), {}), frozenset({"C"}))
 
     def test_no_control_falls_back_to_slot_three(self):
-        self.assertEqual(_resolve_camera(self._squad(), {}), "C")
+        self.assertEqual(_resolve_cameras(self._squad(), {}), frozenset({"C"}))
+
+    def test_shared_mode_gives_every_controlled_nikke(self):
+        self.assertEqual(
+            _resolve_cameras(self._squad(("B", "D")), {"camera_mode": "shared"}),
+            frozenset({"B", "D"}))
+
+    def test_shared_mode_without_control_still_falls_back(self):
+        self.assertEqual(
+            _resolve_cameras(self._squad(), {"camera_mode": "shared"}), frozenset({"C"}))
+
+    def test_burst_charge_carrier_takes_the_camera_alone(self):
+        """버충 담당이 있으면 `camera_mode`도 명시 카메라도 보지 않는다."""
+        squad = self._squad(controlled=("D",), burst_charge=("B",))
+        self.assertEqual(_resolve_cameras(squad, {}), frozenset({"B"}))
+        self.assertEqual(
+            _resolve_cameras(squad, {"camera_mode": "shared"}), frozenset({"B"}))
+        self.assertEqual(_resolve_cameras(squad, {"camera": "E"}), frozenset({"B"}))
+
+    def test_two_burst_charge_carriers_fail_loudly(self):
+        with self.assertRaises(ValueError):
+            _resolve_cameras(self._squad(burst_charge=("B", "D")), {})
+
+    def test_single_mode_rejects_a_list_of_two(self):
+        with self.assertRaises(ValueError):
+            _resolve_cameras(self._squad(), {"camera": ["B", "D"]})
+
+    def test_shared_mode_accepts_a_list(self):
+        self.assertEqual(
+            _resolve_cameras(self._squad(), {"camera": ["B", "D"], "camera_mode": "shared"}),
+            frozenset({"B", "D"}))
+
+    def test_unknown_camera_mode_fails_loudly(self):
+        with self.assertRaises(ValueError):
+            _resolve_cameras(self._squad(), {"camera_mode": "nope"})
+
+
+class BurstChargeControlTest(unittest.TestCase):
+    """버충 컨트롤 — 톡톡이를 **충전 창 안에서만** 건다.
+
+    실전 조작 그대로다: 충전 창에서는 톡톡이로 발수를 벌어 사이클을 당기고, 창 밖에서는
+    풀차지로 배율을 챙긴다. 창 구분 없이 톡톡이만 켜면 풀차지 게이지 배율(×2.5)이
+    통째로 죽어 사이클이 오히려 느려진다 — 아래 세 갈래가 그것을 보인다.
+    """
+
+    SQUAD = ["루주", "크라운", "마스트 : 로망틱 메이드", "신데렐라", "메이든 : 아이스 로즈"]
+
+    def _run(self, tap):
+        chars = {"루주": {"control": {"tap_fire": tap}}} if tap else None
+        return _run(self.SQUAD, {"duration": 180, "first_burst_time": 3.0}, chars=chars)
+
+    @staticmethod
+    def _bursts(result):
+        return sum(1 for e in result.log.burst_log if "full_burst 시작" in e.event)
+
+    def test_window_beats_both_extremes(self):
+        plain = self._run(None)
+        always = self._run({"rate": 3.0})
+        windowed = self._run({"rate": 3.0, "window": "burst_charge"})
+
+        # 창 구분 없는 톡톡이는 **손해다** — 풀차지 배율을 버리는 만큼 사이클이 느려진다.
+        self.assertLess(self._bursts(always), self._bursts(plain))
+        self.assertLess(always.squad_total, plain.squad_total)
+        # 창을 가르면 둘 다 이긴다.
+        self.assertGreater(self._bursts(windowed), self._bursts(plain))
+        self.assertGreater(windowed.squad_total, plain.squad_total)
+
+    def test_window_mixes_both_shot_kinds(self):
+        """창 안은 논차지, 창 밖은 풀차지 — 한 전투에 둘 다 나온다."""
+        windowed = self._run({"rate": 3.0, "window": "burst_charge"})
+        rouge = [e for e in windowed.log.gauge_log if e.caster == "루주"]
+        kinds = {e.source for e in rouge}
+        self.assertIn("weapon", kinds, "충전 창 안에서 톡톡이가 안 걸렸다")
+        self.assertIn("weapon:full_charge", kinds, "창 밖 풀차지가 게이지에 안 잡혔다")
+
+        # 창 구분 없는 톡톡이는 풀차지가 한 발도 없다.
+        always = self._run({"rate": 3.0})
+        self.assertEqual(
+            {e.source for e in always.log.gauge_log if e.caster == "루주"}, {"weapon"})
+
+    def test_carrier_takes_the_camera_from_slot_three(self):
+        """컨트롤이 없으면 카메라는 3번 자리, 버충 담당이 생기면 그 사람에게 간다."""
+        plain = self._run(None)
+        windowed = self._run({"rate": 3.0, "window": "burst_charge"})
+
+        def focus(result):
+            return next(e.event for e in result.log.burst_log if "카메라 초점" in e.event)
+
+        self.assertIn(self.SQUAD[2], focus(plain))
+        self.assertIn("루주", focus(windowed))
+
+    def test_unknown_window_fails_loudly(self):
+        from calculator.timeline import CharState
+
+        char = build_squad(["루주"], chars={
+            "루주": {"control": {"tap_fire": {"rate": 3.0, "window": "nope"}}},
+        })[0]
+        with self.assertRaises(ValueError):
+            CharState(char, 100000.0, "")
 
 
 class FixedModeTest(unittest.TestCase):
