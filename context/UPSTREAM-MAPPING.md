@@ -3,7 +3,7 @@
 判定 `Jgaram/nikke-calc` 的引擎修正在這個 fork 裡有沒有，**以 commit 為單位**。
 為了不要用「看起來一樣」帶過，每個判定都附根據。
 
-**涵蓋率**：upstream 全歷史 86 筆（`ea82f76` 當時），本表目前判定 **26 筆**。
+**涵蓋率**：upstream 全歷史 86 筆（`ea82f76` 當時），本表目前判定 **35 筆**。
 其餘**還沒逐筆判定過** —— 沒進表不等於不適用，只等於沒看過。未判定的清單與分區
 待辦在 `docs/上游移植-交接筆記.md` §4。
 
@@ -53,9 +53,8 @@ git merge-base ce75361 Moris-kr/master  → f56124d
 | `63a784e` | 執行順序·模式復歸·免費滿蓄力·MG 預熱 | **已移植** `2287c10` | 發數耗盡的結束路徑有蓄力重置，**持續時間到期·切換解除的路徑沒有**。進入模式前的 `_charge_start_t` 凍著，回到原武器就變成一發免費滿蓄力。影響薇爾維特「俐落收尾」· 瀧奈「壓制開始」· 拉普拉斯「拉普拉斯炸彈」 |
 | `927a613` | 「N 發維持」的增益自己破壞自己的條件 | **已移植** `5c2cf49` | `_has_runtime_cond()` 沒有 `duration_bullets` 參數。發數到期的增益 `expires_at` 留在 `inf`，通過了 runtime 重新評估的閘門，於是用 `not_self_state:` 擋重複施加的增益把自己關掉。影響貝斯蒂：戰術升級「飛彈導引」。連帶修正了 `parsed_skills.json` 的效果排列 |
 | `b3ec538` | 格拉維過熱 30·60 次計數器 | **已移植** `e2a2a21` | fork 的 `parsed_skills.json` 裡沒有「過熱命中」量表，`과열 II·III` 和「未來預知」同一瞬間一起開，30·60 次完全是裝飾。改用虛擬量表（累積 + 每次未來預知歸零）+ `passive` 登錄 + `gauge_above` 執行期判定。純資料，引擎不用動 |
-
-| `ace1a61` | 不適用 | 上游的 parser 會吐出泛稱 `self_state:무기 변경`，所以引擎需要一個總稱分支（`_has_self_state` 的 `WEAPON_CHANGE_STATE`）。**fork 的 parser 解析成實際模式名** —— 목단「다 덤벼! 2」的條件是 `self_state:정정당당 승부다!`，而牠 `weapon_change` 項目的 `name` 正是同一個字串，字面比對就成立。`data/parsed_skills.json` 全檔 `self_state:무기 변경` 出現 **0 次**，泛稱這條路在 fork 到不了。日後若 parser 改成吐泛稱，這一列要重驗 |
-| `35d8c20` | 部分移植 | 三件事。**`infinite_ammo` 已存在** —— fork 叫 `max_ammo_infinite`，`test_roster_batch06` 有釘。**掩體那半已移植** `7cf88f8`：有限掩體到期時收掉進行中的裝填（還有彈就當場切，0 發等下一個彈夾），`_finish_reload` 的 docstring 本來就記著這個缺口。⚠️ 判定要放在 `tick()` 的裝填完成檢查**之前** —— 那個檢查在裝填進行中就 `return`，加在 `_tick_cover` 裡是死碼。**還剩** `reload_ratio_pct`，見 A 區 `93ec10a` |
+| `ace1a61` | 「武器變更狀態」總稱判定 | 不適用 | 上游的 parser 會吐出泛稱 `self_state:무기 변경`，所以引擎需要一個總稱分支（`_has_self_state` 的 `WEAPON_CHANGE_STATE`）。**fork 的 parser 解析成實際模式名** —— 목단「다 덤벼! 2」的條件是 `self_state:정정당당 승부다!`，而牠 `weapon_change` 項目的 `name` 正是同一個字串，字面比對就成立。`data/parsed_skills.json` 全檔 `self_state:무기 변경` 出現 **0 次**，泛稱這條路在 fork 到不了。日後若 parser 改成吐泛稱，這一列要重驗 |
+| `35d8c20` | 格拉維放熱：無限彈藥 + 掩體中斷裝填 | 部分移植 | 三件事。**`infinite_ammo` 已存在** —— fork 叫 `max_ammo_infinite`，`test_roster_batch06` 有釘。**掩體那半已移植** `7cf88f8`：有限掩體到期時收掉進行中的裝填（還有彈就當場切，0 發等下一個彈夾），`_finish_reload` 的 docstring 本來就記著這個缺口。⚠️ 判定要放在 `tick()` 的裝填完成檢查**之前** —— 那個檢查在裝填進行中就 `return`，加在 `_tick_cover` 裡是死碼。**還剩** `reload_ratio_pct`，見 A 區 `93ec10a` |
 
 ## A 區 —— 累積式爆裂量表（完成）
 
@@ -68,6 +67,23 @@ git merge-base ce75361 Moris-kr/master  → f56124d
 | `cf0ef28` | 不適用 | 這個 commit 是上游把**自己測試用的 3 個編成**的裝填控制從常數（政策 A）換成政策 C。這個 fork 的 29 個 baseline 編成**一個控制設定都沒有**，沒有常數可以換。在 baseline 上新加操作屬於測試台設計決策，不是移植；而且預設模式還是 `fixed` 的期間，控制只會算成損失 |
 | `1300089` | 跳過 | `3b63720` 整個退掉了。中間型的校正常數（`ally_flat`）是上游自己註明「原因不明·離散 ±30%」，9 天後就移除了 |
 | `3b63720` | 已移植 | `a0fa513` |
+
+## B 區 —— 操作與鏡頭仲裁
+
+| commit | 內容 | 判定 | 根據 |
+|---|---|---|---|
+| `c751e2a` · `54e30af` | 首循環 Full Burst 預測 | **已移植** `997170e` | 政策 B·`if_dry` 原本只有「前一循環週期」觀測，第一循環沒值就不作用（CONTROL.md §미구현 記著）。補上冷卻鏈 fallback。**觀測仍優先** —— 鏈條看不到還沒撒下的 `burst_cooldown_reduce`。值只在 Full Burst 結束取一次，否則「每循環一次」守衛失效。fork 調整兩處：階段延遲是 `burst_switch_delay + burst_reaction`（上游只有前者）、`_burst_delay` 項拿掉（`544adeb` 未移植）。實測誤差 +0.020 秒 |
+| `8d16ea5`（클릭 스케줄） | `control.click` 統一 톡톡이／홀드 | **已移植** `8ae5faf` | 四窗 × 三模式，先匹配者勝，按下／放開分開詢問。舊鍵 desugar，**baseline 29/29 一格未動**。順帶拿掉 `_tick_charge` 重複的 `_hold_release_t < 0` 守衛 —— 留著排程順序沒有意義 |
+| `8d16ea5`（조작 모드） | `control_mode` solo／warn／strict | 需移植 | ↓ 與下列同批 |
+| `c961351` | 카메라 경합依等級仲裁 | 需移植 | fork 的 `camera`／`camera_mode` 是 **config 層靜態指定**；仲裁是**執行期會變的歸屬**，不是同一個東西。動它會改到 `컨트롤_*` 兩條 baseline |
+| `ac8fe2a` | anchor 語法·window enum·裝填控制 3 政策 | 需移植 | anchor／gate 是為了餵 `c961351` 而存在 |
+| `544adeb` | 爆裂納入 control·第五按鈕·delayed burst | 需移植 | priority 同上。`_burst_delay` 也在這裡 |
+| `29c7ce1` | attachment schema 統一 | 需移植 | — |
+| `cf8c9ec` | runtime control condition 擴充 | 需移植 | — |
+| `ec774c7` | 武器變更中控制排程不能停住 | 需移植 | — |
+
+**剩下七筆咬在一起**，拆開做沒有意義：`ac8fe2a` 的 anchor／gate 與 `544adeb` 的
+priority 都是 `c961351` 相機仲裁的輸入。
 
 ## 怎麼重新確認
 
