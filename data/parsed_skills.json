@@ -2915,24 +2915,6 @@
     {
       "source": "스킬1",
       "type": "buff",
-      "name": "건강한 몸",
-      "trigger": {
-        "timing": [
-          "received_hit_count:1"
-        ],
-        "condition": [
-          "not_self_state:건강한 몸"
-        ]
-      },
-      "target": "self",
-      "stat": "invincible",
-      "polarity": "beneficial",
-      "duration": 3,
-      "max_trigger": 5
-    },
-    {
-      "source": "스킬1",
-      "type": "buff",
       "name": "건강한 몸 2",
       "trigger": {
         "timing": [
@@ -2976,6 +2958,24 @@
         "10": 10.26
       },
       "duration": 20
+    },
+    {
+      "source": "스킬1",
+      "type": "buff",
+      "name": "건강한 몸",
+      "trigger": {
+        "timing": [
+          "received_hit_count:1"
+        ],
+        "condition": [
+          "not_self_state:건강한 몸"
+        ]
+      },
+      "target": "self",
+      "stat": "invincible",
+      "polarity": "beneficial",
+      "duration": 3,
+      "max_trigger": 5
     },
     {
       "source": "스킬1",
@@ -26365,26 +26365,6 @@
     {
       "source": "스킬1",
       "type": "buff",
-      "name": "미사일 가이드",
-      "trigger": {
-        "timing": [
-          "full_charge_hit"
-        ],
-        "condition": [
-          "not_self_state:미사일 가이드"
-        ]
-      },
-      "target": "self",
-      "stat": "charge_speed_pct",
-      "polarity": "beneficial",
-      "max_stack": 1,
-      "fixed_value": 100,
-      "duration": -1,
-      "duration_bullets": 3
-    },
-    {
-      "source": "스킬1",
-      "type": "buff",
       "name": "미사일 가이드 2",
       "trigger": {
         "timing": [
@@ -26410,6 +26390,26 @@
         "9": 55.84,
         "10": 58.5
       },
+      "duration": -1,
+      "duration_bullets": 3
+    },
+    {
+      "source": "스킬1",
+      "type": "buff",
+      "name": "미사일 가이드",
+      "trigger": {
+        "timing": [
+          "full_charge_hit"
+        ],
+        "condition": [
+          "not_self_state:미사일 가이드"
+        ]
+      },
+      "target": "self",
+      "stat": "charge_speed_pct",
+      "polarity": "beneficial",
+      "max_stack": 1,
+      "fixed_value": 100,
       "duration": -1,
       "duration_bullets": 3
     },
