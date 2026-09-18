@@ -118,6 +118,28 @@ _RELOAD_MARGIN_DEFAULT = 0.1   # 장전컨 B: 풀버스트 시작 몇 초 뒤에
 _HOLD_LEAD_DEFAULT     = 0.5   # 홀드컨: 풀버스트 종료 몇 초 전에 들고 있던 풀차지를 뗄지
 _CTRL_FRAME            = 1.0 / 60.0  # 한 프레임(초). 판정 직후를 가리킬 때 쓰는 최소 여유
 
+# ── 클릭 스케줄 ───────────────────────────────────────────────────────────
+# 톡톡이와 홀드는 **같은 좌클릭에 실린 두 행위**다(§조작 원시타입). 따로 둔 키로는
+# "어느 구간에서 무엇을 하는가"를 적을 수 없어, 실행층이 둘의 우선순위를 떠안았다.
+# 한 리스트로 합치고 **먼저 매치되는 항목이 이긴다** — 코드가 판정하지 않고 입력이 정한다.
+# 종전 키(`tap_fire`·`hold`)는 `_desugar_click()`이 그대로 받는다.
+#
+# **상태 창** — 전투 상태 그 자체다. 앵커+오프셋으로 환산하지 않는다.
+#   always          전투 내내 (기본)
+#   burst_charge    버스트 게이지 충전 창. 판정이 `state["burst_gauge_charging"]`이고
+#                   이건 게이지 가산이 쓰는 **바로 그 값**이라 구조적으로 어긋날 수 없다
+#   own_full_burst  본인이 버스트를 쓴 사이클의 풀버스트 동안
+#   after_own_fb    창 자체는 `own_full_burst`와 같고, **시각을 역산하는 전용 슬롯**이다
+#                   (`hold_judge`와만 짝짓는다 — 판정이 풀버스트 **뒤에** 떨어지게 한다)
+_CLICK_WINDOWS = ("always", "burst_charge", "own_full_burst", "after_own_fb")
+_CLICK_MODES   = ("tap", "hold", "hold_judge")
+# 스케줄을 두 관심사로 나눠 묻는다 — 한 줄이 누름과 떼기를 함께 정하지 않는다.
+_CLICK_PRESS_MODES = ("tap", "hold")          # 누름: 차지 시작 시점에 래치
+_CLICK_HOLD_MODES  = ("hold", "hold_judge")   # 떼기: 매 틱 평가
+# 항목이 쓸 수 있는 키 — **닫혀 있다.** 모르는 키가 살아남으면 오타가 조용히
+# "아무 일도 안 함"이 된다. `_timing`은 검증 뒤에 붙는 내부 키다.
+_CLICK_ENTRY_KEYS = ("window", "mode", "rate", "release", "full_charge_interval", "lead")
+
 # ── 기본 config / enemy ────────────────────────────────────────────────────
 
 DEFAULT_CHAR: dict = {
@@ -435,7 +457,10 @@ class CharState:
         self._tap_charge: float = 0.0   # 그중 실제로 차지되는 시간
         self._tap_release: float = 0.0
         self._tap_post: float = 0.0
-        tap = control.get("tap_fire")
+        # 클릭 스케줄 — 종전 키를 여기로 접어 넣는다(`_desugar_click`). 이 아래의
+        # `tap_*` 필드는 **이번 발에 걸린 항목**의 값으로 차지 시작 때마다 다시 채워진다.
+        self._click_sched: list[dict] = self._build_click_sched(control)
+        tap = next((e for e in self._click_sched if e["mode"] == "tap"), None)
         if tap and self.fire_mode == "charge":
             rate = float(tap["rate"])
             self._tap_release = float(tap.get("release", _TAP_RELEASE_DEFAULT))
@@ -450,16 +475,6 @@ class CharState:
             self._tap_charge = max(0.0, slack - _TAP_CUTTABLE_DELAY)
             self._tap_hold = _TAP_MIN_HOLD + self._tap_charge
             self.tap_fire = True
-        # 톡톡이를 **거는 구간**. 정본: context/CONTROL.md §버충 컨트롤.
-        #   "always"       — 전투 내내 (기본, 종전 동작)
-        #   "burst_charge" — 버스트 게이지 충전 창에서만. 창 밖에서는 평소대로 풀차지를
-        #                    쏜다. 게이지는 충전 창에서만 쌓이므로(`burst_gauge_charging`),
-        #                    "창 안에서는 발수, 창 밖에서는 배율"이라는 실전 조작이 된다.
-        self._tap_window: str = str((tap or {}).get("window", "always"))
-        if self._tap_window not in ("always", "burst_charge"):
-            raise ValueError(
-                f'{self.name}: tap_fire.window는 "always" 또는 "burst_charge"여야 한다: '
-                f"{self._tap_window!r}. context/CONTROL.md §버충 컨트롤")
         # 이번 차지를 톡톡이로 칠지 — **차지 시작 시점에 래치**한다. 매 프레임 다시 보면
         # 창 경계에서 한 발이 반쯤 톡톡이인 채로 갈라진다.
         self._tap_this_shot: bool = False
@@ -514,9 +529,8 @@ class CharState:
         # 종료 `lead`초 전에 뗀다. **버스트 엄폐컨과 목적이 같고 수단만 다르다** —
         # 둘 다 발수로 소모되는 버프를 일반 공격에 흘리지 않는 컨트롤이고, 차지형은
         # 엄폐 대신 홀드를 쓴다(들고 있는 동안 차지 배율까지 챙기므로 더 이득이다).
-        hd = control.get("hold") or {}
-        self.hold_policy: str = hd.get("policy", "")
-        self.hold_lead: float = float(hd.get("lead", _HOLD_LEAD_DEFAULT))
+        # 홀드도 클릭 스케줄에서 나온다 — `hold.policy`는 desugar가 창+모드로 바꿔 둔다.
+        # 여기 남는 건 「이 사이클에서 이미 걸었나」 가드뿐이다.
         self._hold_ctrl_anchor: float = -1.0
 
         # `charge_hold:N` 판정용 상태 (밀크 : 블루밍 바니 부끄러움).
@@ -936,19 +950,114 @@ class CharState:
         return max(0.0, max(0.0, self.charge_time_base - cut)
                    + buffs.get("charge_time_flat", 0.0))
 
-    def _tap_window_open(self, bm: BuffManager) -> bool:
-        """이번 차지를 톡톡이로 칠 것인가. 정본: context/CONTROL.md §버충 컨트롤.
+    def _build_click_sched(self, control: dict) -> list[dict]:
+        """클릭 스케줄을 만든다 — 종전 키를 펴고, 닫힌 어휘로 검증한다.
 
-        `window == "burst_charge"`면 **버스트 게이지 충전 창 안에서만** 참이다. 그 창은
-        `state["burst_gauge_charging"]`(= `BurstController._phase == "idle"`) 한 곳에서만
-        정의되고 게이지 가산이 쓰는 것과 같은 값이라, 톡톡이 구간과 충전 구간이 구조적으로
-        어긋날 수 없다. 전투 시작부터 첫 버스트까지도 충전 창이므로 그 구간도 포함된다.
+        `control["click"]`을 직접 적으면 그게 이기고, 없으면 `tap_fire`·`hold`를 편다.
+        둘을 함께 적는 건 막는다 — 같은 좌클릭을 두 곳에서 정의하는 입력이라 어느 쪽이
+        이기는지가 조용한 규칙이 된다.
         """
+        raw = control.get("click")
+        if raw is not None and (control.get("tap_fire") or control.get("hold")):
+            raise ValueError(
+                f"{self.name}: `click`과 종전 키(`tap_fire`·`hold`)를 함께 쓸 수 없다. "
+                f"한쪽으로 적는다. context/CONTROL.md §설정 스키마")
+        sched = list(raw) if raw is not None else self._desugar_click(control)
+        for e in sched:
+            if extra := set(e) - set(_CLICK_ENTRY_KEYS):
+                raise ValueError(
+                    f"{self.name}: 모르는 click 항목 키: {sorted(extra)}. "
+                    f"쓸 수 있는 것: {list(_CLICK_ENTRY_KEYS)}. context/CONTROL.md §설정 스키마")
+            mode = e.get("mode")
+            if mode not in _CLICK_MODES:
+                raise ValueError(
+                    f"{self.name}: 모르는 click.mode: {mode!r}. "
+                    f"{' · '.join(_CLICK_MODES)} 중 하나여야 한다. context/CONTROL.md §설정 스키마")
+            window = e.setdefault("window", "always")
+            if window not in _CLICK_WINDOWS:
+                raise ValueError(
+                    f"{self.name}: 모르는 click.window: {window!r}. "
+                    f"{' · '.join(_CLICK_WINDOWS)} 중 하나여야 한다. context/CONTROL.md §설정 스키마")
+            # `after_own_fb`는 역산 전용 슬롯이라 `hold_judge`와만 짝짓는다. 짝이 어긋나면
+            # 창은 열리는데 역산이 없어 **조용히 평범한 홀드**가 된다.
+            if (window == "after_own_fb") != (mode == "hold_judge"):
+                raise ValueError(
+                    f"{self.name}: `after_own_fb`와 `hold_judge`는 서로만 짝짓는다 "
+                    f"(window={window!r}, mode={mode!r}). context/CONTROL.md §홀드")
+            if mode == "tap" and "rate" not in e:
+                raise ValueError(
+                    f"{self.name}: click.mode=\"tap\"에는 rate가 필요하다. "
+                    f"context/CONTROL.md §톡톡이")
+        return sched
+
+    def _desugar_click(self, control: dict) -> list[dict]:
+        """종전 키(`tap_fire`·`hold`)를 클릭 스케줄로 옮긴다.
+
+        **hold를 tap 앞에 놓는다.** 같은 좌클릭에 실린 두 행위라 동시에 할 수 없고, 유저
+        운용이 "본인 버스트 동안엔 들고 있다가 밖에서는 끊어친다"이기 때문이다
+        (아인 + 에이다 — `calculator/test_tap_hold.py`가 釘고 있는 그 조합).
+        """
+        out: list[dict] = []
+        hd = control.get("hold") or {}
+        policy = hd.get("policy", "")
+        if policy in ("own_full_burst", "charge_hold_after_fb"):
+            out.append({
+                "window": "own_full_burst" if policy == "own_full_burst" else "after_own_fb",
+                "mode": "hold" if policy == "own_full_burst" else "hold_judge",
+                "lead": float(hd.get("lead", _HOLD_LEAD_DEFAULT)),
+            })
+        elif policy:
+            raise ValueError(
+                f"{self.name}: 모르는 hold.policy: {policy!r}. "
+                f'"own_full_burst" 또는 "charge_hold_after_fb"여야 한다. context/CONTROL.md §홀드')
+        tap = control.get("tap_fire")
+        if tap:
+            e = {"window": str(tap.get("window", "always")), "mode": "tap",
+                 "rate": tap["rate"]}
+            for k in ("release", "full_charge_interval"):
+                if k in tap:
+                    e[k] = tap[k]
+            out.append(e)
+        return out
+
+    def _when_open(self, e: dict, bm: BuffManager) -> bool:
+        """이 항목의 창이 지금 열려 있는가. 정본: context/CONTROL.md §설정 스키마."""
+        window = e["window"]
+        if window == "always":
+            return True
+        if window == "burst_charge":
+            # 게이지 가산이 충전 여부를 판정하는 **바로 그 값**이라, 톡톡이 구간과
+            # 충전 구간이 구조적으로 어긋날 수 없다. 전투 시작~첫 버스트도 창이다.
+            return bool(bm.state.get("burst_gauge_charging", False))
+        # own_full_burst · after_own_fb — 창 자체는 같다(본인이 쓴 사이클의 풀버스트).
+        # 역산 여부만 모드가 가른다.
+        return bool(bm.state.get("full_burst", False)
+                    and bm.state.get("burst_casted", {}).get(self.name))
+
+    def _click_entry(self, bm: BuffManager, modes: tuple[str, ...]) -> dict | None:
+        """지금 이 니케의 좌클릭에서 `modes` 중 어떤 항목이 걸리는가.
+        **먼저 매치되는 항목이 이긴다.** None이면 해당 없음(= 평소대로 자동).
+
+        `modes`로 관심사를 나눠 묻는다 — 스케줄 한 줄이 **누름**과 **떼기** 양쪽을
+        정하지 않기 때문이다. `hold_judge`가 누름 선택에 참여하지 않는 것이 그 예다:
+        그건 `charge_hold:N` 판정이 원하는 곳에 떨어지도록 시각을 역산하는 항목이라,
+        창이 열린 내내 누름을 바꾸는 게 아니라 **그 한 발만** 풀차지로 들게 만든다.
+        참여시키면 밀크 : 블루밍 바니가 본인 버스트 내내 톡톡이를 멈춘다.
+
+        코드가 톡톡이·홀드의 우선순위를 판정하지 않는다 — 어느 구간에서 무엇을 할지는
+        입력이 정한다.
+        """
+        for e in self._click_sched:
+            if e["mode"] in modes and self._when_open(e, bm):
+                return e
+        return None
+
+    def _tap_window_open(self, bm: BuffManager) -> bool:
+        """이번 차지를 톡톡이로 칠 것인가 — 누름 관심사에서 `tap`이 걸리는가."""
         if not self.tap_fire:
             return False
-        if self._tap_window == "burst_charge":
-            return bool(bm.state.get("burst_gauge_charging", False))
-        return True
+        e = self._click_entry(bm, _CLICK_PRESS_MODES)
+        return e is not None and e["mode"] == "tap"
 
     def _tick_charge(self, t: float, bm: BuffManager, enemy: dict, cfg: dict) -> list[HitEvent]:
         events = []
@@ -997,7 +1106,7 @@ class CharState:
             # 톡톡이로 쏘다가 **본인 버스트 동안만** 풀차지를 들고 있는 조작이
             # 실제로 쓰인다(아인 + 에이다). 톡톡이가 늘 이기게 두면 홀드가 통째로
             # 죽어, 홀드를 얹은 조합이 톡톡이만 켠 것과 한 자리도 다르지 않았다.
-            if self._tap_this_shot and not self._force_full_charge and self._hold_release_t < 0:
+            if self._tap_this_shot and not self._force_full_charge:
                 # 톡톡이: 누르는 시간이 고정이고, 그중 사격 전 딜레이를 뺀 만큼만 차지된다.
                 # 차지속도 버프로 유효 차지 시간이 그 아래로 내려가면 풀차지 샷이 된다.
                 self._charge_end_t = self._charge_start_t + self._tap_hold
@@ -1683,19 +1792,19 @@ class CharState:
         """
         if self.fire_mode != "charge":
             return
-        if self.hold_policy not in ("own_full_burst", "charge_hold_after_fb"):
-            return
-        if not bm.state.get("full_burst", False):
-            return
-        if not bm.state.get("burst_casted", {}).get(self.name):
+        # 떼기 관심사에서 걸리는 항목을 찾는다. 창 판정(`본인 풀버스트인가`)은
+        # `_when_open()` 한 곳에 있다 — 여기서 다시 쓰지 않는다.
+        entry = self._click_entry(bm, _CLICK_HOLD_MODES)
+        if entry is None:
             return
         anchor = bm.state.get("full_burst_end_t", -1.0)
         if anchor <= 0 or anchor == self._hold_ctrl_anchor:
             return  # 이 사이클에서 이미 걸었다
         self._hold_ctrl_anchor = anchor
+        lead = float(entry.get("lead", _HOLD_LEAD_DEFAULT))
 
-        if self.hold_policy == "own_full_burst":
-            self._hold_release_t = anchor - self.hold_lead
+        if entry["mode"] == "hold":
+            self._hold_release_t = anchor - lead
             return
 
         # `charge_hold_after_fb` — 본인 버스트가 **끝난 직후에** `charge_hold:N` 판정이
@@ -1711,7 +1820,7 @@ class CharState:
         if not thresholds:
             return  # `charge_hold:N`을 쓰지 않는 캐릭터에는 의미가 없다
         need = thresholds[-1][0]
-        self._ch_judge_t = anchor + self.hold_lead
+        self._ch_judge_t = anchor + lead
         self._ch_charge_start_t = self._ch_judge_t - self._effective_charge_time(bm, t) - need
 
     def _apply_burst_cover(self, t: float, bm: BuffManager) -> bool:
