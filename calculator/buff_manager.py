@@ -2907,6 +2907,18 @@ class BuffManager:
             ]
         return out
 
+    def own_buff_expires_at(self, caster: str, name: str, t: float) -> float | None:
+        """`caster`가 직접 발동한 **유한** 버프 `name`의 현재 만료 시각. 없으면 None.
+
+        **대상은 일부러 조회하지 않는다.** 지연 resolve 버프의 대상을 미리 확정하면
+        컨트롤이 「관찰했다」는 이유만으로 전투 결과가 바뀐다 — 그래서 이 값은
+        「본인에게 걸렸나」가 아니라 **본인이 발동한 이름 있는 효과가 지금 살아 있나**만
+        답한다. 정본: context/CONTROL.md §설정 스키마.
+        """
+        expires = [ab.expires_at for ab in self._by_name(name)
+                   if ab.caster == caster and t < ab.expires_at < math.inf]
+        return max(expires) if expires else None
+
     def _by_name(self, name: str) -> list:
         """효과 이름이 일치하는 활성 버프 목록 (_active 순서 유지).
 

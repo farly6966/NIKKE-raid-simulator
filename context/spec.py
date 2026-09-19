@@ -549,6 +549,13 @@ _SKIP_KEYS = ("name", "equipment")  # equipment는 부위별 dict라 노이즈�
 def _fmt(v) -> str:
     if isinstance(v, dict):
         return "{" + ", ".join(f"{k}={_fmt(x)}" for k, x in v.items()) + "}" if v else "없음"
+    if isinstance(v, list) and v and all(isinstance(e, dict) and "mode" in e for e in v):
+        # 클릭 스케줄(`control.click`)은 항목마다 dict라 그대로 찍으면 한 줄이 길다.
+        # 읽는 사람이 알아야 하는 건 **언제 무엇을 하나**뿐이다. 앵커 구간에는 `window`가
+        # 없으므로 표기는 `timeline._when_label()`이 만든다 — 정본 한 곳이고, 러너 CLI가
+        # 받는 표기와 같은 모양이다.
+        from calculator.timeline import _when_label
+        return " → ".join(f"{_when_label(e)}:{e['mode']}" for e in v)
     return str(v)
 
 

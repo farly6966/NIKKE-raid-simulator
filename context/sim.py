@@ -97,9 +97,10 @@ def main() -> None:
         help="클릭 스케줄을 직접 적는다. 같은 캐릭터에 여러 번 주면 **준 순서대로** 쌓이고 "
              "먼저 매치되는 항목이 이긴다. 셋째 칸은 상태 창(always·burst_charge·"
              "burst_chain·own_full_burst·after_own_fb)이거나 앵커(combat_start·fb_end·"
-             "own_fb_end·next_fb_start)이고, 앵커면 offset=·len=으로 구간을 적는다. "
+             "own_fb_end·next_fb_start·own_buff_end)이고, 앵커면 offset=·len=으로 구간을 적는다. "
              "행위는 tap·hold·hold_until_close·hold_judge. priority=high·mid·low로 "
-             "조작 등급을 덮어쓴다. "
+             "조작 등급을 덮어쓴다. gate=단계/정식명칭으로 그 단계 버스트 사용자가 맞는 "
+             "사이클만 통과시키고, own_buff_end 앵커는 buff=효과이름이 필요하다. "
              "예: --click \"에이다:own_full_burst:hold:lead=0.5\" "
              "--click \"프리카:own_fb_end:tap:offset=-6,len=6,rate=4.0\" "
              "(context/CONTROL.md §설정 스키마)",
@@ -108,7 +109,9 @@ def main() -> None:
         "--reload-ctrl", action="append", metavar="이름:정책|앵커[:값][:키=값]",
         help="장전컨. 종전 정책은 before_fb_end(값=lead, 기본 0.3) · into_fb(값=margin, "
              "기본 0.1) · finish_by_fb_end(값=margin)이고, 앵커(fb_end·own_fb_end·"
-             "next_fb_start·combat_start)를 직접 적고 offset=·minus=reload_total을 줘도 된다. "
+             "next_fb_start·combat_start·own_buff_end)를 직접 적고 offset=·minus=reload_total·"
+             "buff=효과이름·gate=단계/정식명칭을 줘도 된다. 정책 D는 finish_by_own_buff_end "
+             "(buff= 필수). "
              "예: --reload-ctrl \"리버렐리오:into_fb\" / "
              "--reload-ctrl \"프리카:fb_end:offset=-0.1:minus=reload_total\" "
              "(context/CONTROL.md §장전컨)",
@@ -201,6 +204,34 @@ def main() -> None:
     # 컨트롤 (context/CONTROL.md). "이름[:값[:값]]" 형식을 char config의 control로 옮긴다
     controls: dict[str, dict] = {}
 
+    def _ctrl_value(key: str, raw: str):
+        """`키=값` 한 칸을 파이썬 값으로. 검증은 조립 시점(timeline)이 한다."""
+        raw = raw.strip()
+        if key == "gate":
+            # `단계/정식 명칭` — 이름에 콜론이 들어가므로(`아니스 : 스타`) 구분자는 `/`다.
+            stage, _, user = raw.partition("/")
+            if not user:
+                print(f"--…:gate 는 `단계/정식 명칭` 표기다 (받은 값 {raw!r})")
+                sys.exit(2)
+            return {"burst_stage": stage.strip(), "burst_user": user.strip()}
+        if key in ("priority", "minus", "buff"):
+            return raw
+        return float(raw)
+
+    def _rejoin_kv(tokens: list[str]) -> list[str]:
+        """콜론이 든 정식 명칭(`아니스 : 스타`)이 `:` 분할로 쪼개진 것을 되붙인다.
+
+        `키=값` 토큰 뒤에 `=` 없는 토큰이 오면 그건 앞 값의 일부다 — CLI 표기가 콜론을
+        칸 구분자로 쓰는 이상 이름과 구분할 방법이 없으므로 이 규칙으로 되돌린다.
+        """
+        out: list[str] = []
+        for tok in tokens:
+            if "=" not in tok and out and "=" in out[-1]:
+                out[-1] += ":" + tok
+            else:
+                out.append(tok)
+        return out
+
     def _split(spec: str) -> list[str]:
         """캐릭터 이름에 콜론이 들어가므로(`아니스 : 스타`) 스쿼드 이름으로 먼저 매칭한다."""
         for n in members:
@@ -230,11 +261,11 @@ def main() -> None:
         entry: dict = ({"anchor": parts[1]} if parts[1] in _ANCHORS
                        else {"window": parts[1]})
         entry["mode"] = parts[2]
-        for kv in (parts[3].split(",") if len(parts) > 3 else []):
+        # 키=값 칸은 콤마로 나뉜다. `gate=3/아니스 : 스타`처럼 값에 콜론이 있으면 위
+        # `_split`이 더 쪼개 놨으므로 먼저 되붙인다.
+        for kv in (":".join(parts[3:]).split(",") if len(parts) > 3 else []):
             k, _, v = kv.partition("=")
-            k = k.strip()
-            # 등급·동적 오프셋은 문자열이다 — 검증은 조립 시점(timeline)이 한다
-            entry[k] = v.strip() if k in ("priority", "minus") else float(v)
+            entry[k.strip()] = _ctrl_value(k.strip(), v)
         controls.setdefault(parts[0], {}).setdefault("click", []).append(entry)
 
     for spec in (args.reload_ctrl or []):
@@ -244,13 +275,12 @@ def main() -> None:
             sys.exit(2)
         # 정책 자리도 **정책 이름이거나 앵커 이름**이다.
         rl: dict = {"anchor": parts[1]} if parts[1] in _ANCHORS else {"policy": parts[1]}
-        for extra in parts[2:]:
+        for extra in _rejoin_kv(parts[2:]):
             if extra == "if_dry":
                 rl["if_dry"] = True
             elif "=" in extra:
                 k, _, v = extra.partition("=")
-                k = k.strip()
-                rl[k] = v.strip() if k in ("priority", "minus") else float(v)
+                rl[k.strip()] = _ctrl_value(k.strip(), v)
             else:
                 rl["lead" if parts[1] == "before_fb_end" else "margin"] = float(extra)
         controls.setdefault(parts[0], {})["reload"] = rl
