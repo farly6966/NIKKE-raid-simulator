@@ -913,6 +913,7 @@ export const EN: Record<string, string> = {
   '받는 대미지 증가': 'Damage taken ▲',
   '받는 대미지 분산': 'Damage taken split',
   '재장전 속도': 'Reload speed',
+  '재장전 비율': 'Reload ratio',
   '재장전 시간 고정': 'Fixed reload time',
   '지정 버프 제거': 'Remove named buff',
   '부활': 'Revive',

@@ -163,6 +163,8 @@ export const STAT_NAMES: Record<string, string> = {
   received_dmg_pct: '받는 대미지 증가',
   received_dmg_split: '받는 대미지 분산',
   reload_speed_pct: '재장전 속도',
+  // 속도와 다른 축 — 1회가 채우는 **양**이다(깎으면 횟수가 는다). 그레이브 `방열`
+  reload_ratio_pct: '재장전 비율',
   reload_time_fixed: '재장전 시간 고정',
   remove_named_buff: '지정 버프 제거',
   revive: '부활',
