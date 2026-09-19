@@ -273,7 +273,8 @@ python calculator/damage.py
 | `charge_time_caster_based` | — | — | ❌ | 차지 시간 절대값 감소. 미구현. `charge_speed_pct` 환산과 별도 |
 | `charge_time_flat` | `charge_time_flat` | — | ✅ | 차지 시간 절대값 N초 가감(텍스트 `차지 시간 N초 ▼` → 음수). 시전자 기준 환산이 없는 **순수 절대값**이라 `charge_time_caster_based`와 별도 키다. 타임라인 처리 — `_effective_charge_time()`이 `charge_speed_pct`를 적용한 **뒤** 더하고 0에서 하한(`charge_time_fixed`가 있으면 그쪽이 먼저 이겨서 무시된다). 마나 `매터 시그마 4` |
 | `charge_speed_overflow_conversion_pct` | `charge_speed_overflow_conversion_pct` | ④ | ✅ | 차지 속도 합산이 100% 초과 시, `overflow × N / 100` 만큼 `charge_dmg_pct`에 합산. `get_buffs()` 면역 처리 직후 후처리. 레드 후드 전용 |
-| `reload_speed_pct` | `reload_speed_pct` | — | ✅ | 타임라인 처리. 재장전 시간에 반영 |
+| `reload_speed_pct` | `reload_speed_pct` | — | ✅ | 타임라인 처리. 재장전 1회에 걸리는 **시간**에 반영 |
+| `reload_ratio_pct` | `reload_ratio_pct` | — | ✅ | 재장전 1회가 채우는 **탄창 비율**에 곱해진다 —— `reload_speed_pct`와 **다른 축**이다. 깎으면 시간은 그대로고 **횟수**가 는다. 기본 비율은 CDN `reload_bullet`(`parsed_nikke.clip_ratio_pct`)이고 `CharState._effective_clip_ratio()`가 둘을 곱한다. 그레이브 `방열`(−50%)이 유일한 사용처 —— 기본 50%(2분할)가 25%(4분할)가 된다(유저 확인). 아군 재장전 속도 버프 `a`가 붙으면 두 축은 `2×(1.5−a)` vs `4×(1−a)`로 **`a=50%`에서만 우연히 같아진다** —— 종전의 `reload_speed_pct: -50` 오등록이 오래 안 드러난 이유다 |
 | `attack_speed_pct` | `attack_speed_pct` | — | ✅ | 타임라인 처리. `_current_fire_rate()`에서 발사 속도에 반영 |
 | `mg_warmup_speed_pct` | `mg_warmup_speed_pct` | — | ✅ | MG 예열 진행 속도 % (음수 = 감소). `_fire()`의 `warmup_shots` 증가량에 `(1 + val/100)` 배율 적용. -100이면 증가 0(예열 정지). 식음 속도는 영향 안 받음. **양수도 성립** — +100이면 예열 진행 2배(레이 (가칭) `정비 및 보급`). 같은 대상에 +100과 −100이 동시 활성이면 **단순 합산해 0(예열 정지)** 이 맞다(유저 확정) — 레이의 13초 예열 버프와 아스카 `긴급 수복 2`의 3초 감소가 겹치는 구간. 아스카 : WILLE, 레이 (가칭) |
 | `accuracy_pct` | `accuracy_pct` | — | ⚠️ | DealForm 어느 항에도 안 들어간다. 단 `timeline.py`의 `_core_hit_prob()`가 탄착군 직경(`base_diameter - acc_slope × accuracy_pct`) 산출에 쓰므로 **코어 보유 적(`core_px > 0`)에서는 코어히트율을 통해 딜에 반영된다**. 기본 보스는 `core_px = 0`이라 무발동. 메카닉 조사 기록은 `context/scenarios/명중률 탄착군.md` |

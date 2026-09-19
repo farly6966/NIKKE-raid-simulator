@@ -667,6 +667,24 @@ class CharState:
                 self._wc_new_session = True
                 self._wc_ammo_full = None   # 進入的當下重新量測
                 self._wc_ammo_restored = False
+
+            # ── 컨트롤 실행층 (모드 중) ────────────────────────────────────
+            # **무기 변경 중에도 엄폐는 된다.** 종전에는 이 분기가 컨트롤층보다 위에서
+            # return해 모드가 켜진 동안 조작이 통째로 멈췄다. 게다가 시각을 지정한 명시
+            # 시퀀스는 버려지지도 않고 **모드 종료 프레임으로 밀렸다** — `_pump_ctrl_seq`가
+            # 지나간 항목을 그대로 들고 있다가 한꺼번에 소비하기 때문이다.
+            # 실측(벨벳 MG 모드 3.9~13.9, `t=6.0 엄폐 2초` 지정): 발동이 13.183으로
+            # 밀렸다. 모드 밖에 같은 지시를 주면 19.783에 제때 발동한다.
+            #
+            # 순서는 모드 밖 경로와 같게 둔다. **정책 엄폐(`_apply_cover_policy`)만
+            # 부르지 않는다** — 그쪽은 「모드 탄창 로직을 흔들지 않도록」 스스로 모드 중을
+            # 막고 있고, 그 판단은 그대로 둔다.
+            if self._owns(bm):
+                self._apply_hold_policy(t, bm)
+                if self._pump_ctrl_seq(t, bm):
+                    return []
+            self._expire_timed_cover(t, bm)
+
             # 자기 탄창을 관리하는 모드(지속형 + 유한 장탄)만 모드 안에서 재장전을 완료시킨다.
             # 처리하지 않으면 장탄 소진 후 재장전이 끝나지 않아 발사가 영원히 멈춘다.
             # 시한부 모드(duration 있음)나 무한 장탄 모드는 기존 동작을 유지한다 —
@@ -678,6 +696,9 @@ class CharState:
                 if t < self.reloading_until:
                     return []
                 self._finish_reload(t, bm)
+            # 엄폐 중이면 모드 사격도 멈춘다 — 컨트롤의 물리 배타는 모드 안팎이 같다.
+            if self._tick_cover(t):
+                return []
             return self._tick_weapon_change(t, bm, enemy, cfg, wc_eff)
 
         # weapon_change 만료 직후: next_fire_time 리셋으로 과거 발사 빚 방지
@@ -2179,14 +2200,30 @@ class CharState:
         speed_pct = bm.get_buffs(self.name, "__enemy__", t).get("reload_speed_pct", 0.0) / 100.0
         return max(0.0, 1.0 - speed_pct)
 
+    def _effective_clip_ratio(self, bm: BuffManager) -> float:
+        """재장전 1회가 채우는 탄창 비율(%). `reload_ratio_pct` 버프가 곱해진다.
+
+        기본값은 CDN `reload_bullet`(클립 무기가 아니면 100). 「재장전 비율 N% ▼」는
+        이 비율을 깎으므로 **횟수가 늘어난다** — 걸리는 시간이 아니라 채우는 양이다.
+        그레이브 `방열`(−50%)이 유일한 사용처: 기본 50% → 25%로 빈 탄창이 4분할된다
+        (유저 확인 —— 上游 `93ec10a`).
+        """
+        base = self.clip_ratio_pct or 100.0
+        mod = bm.get_buffs(self.name, "__enemy__", bm._cur_t).get("reload_ratio_pct", 0.0)
+        return max(1.0, base * (1.0 + mod / 100.0))
+
     def _is_clip_reload(self, bm: BuffManager) -> bool:
         """지금 굴러가는 재장전이 클립 장전인가.
 
+        비율이 100 미만이면 클립이다 —— 로스터에 박힌 클립 무기든, `reload_ratio_pct`
+        버프가 붙어 그렇게 된 경우든 같은 길을 탄다.
         무기 변경 모드 중에는 탄창이 그 모드 무기의 것이므로 클립 규칙을 적용하지 않는다.
         """
-        return self.is_clip and bm.get_weapon_change(self.name) is None
+        if bm.get_weapon_change(self.name) is not None:
+            return False
+        return self._effective_clip_ratio(bm) < 100.0 - 1e-9
 
-    def _clip_gain(self, full: int) -> int:
+    def _clip_gain(self, full: int, bm: BuffManager) -> int:
         """클립 1회가 채우는 발수 = **현재** 최대 장탄 × CDN 비율, **반올림** (유저 확인, 2026-08-19).
 
         비율의 정본은 CDN `reload_bullet`이다(SG·RL 33%, 그레이브 50%). 33%는 종전의
@@ -2197,8 +2234,7 @@ class CharState:
         채우는 **4번째 클립**이 붙는다. 올림으로 두면 이 한 번이 사라져 재장전이 짧아진다.
         `round()`가 아니라 `floor(x + 0.5)`인 이유는 파이썬의 은행가 반올림을 피하기 위함이다.
         """
-        ratio = self.clip_ratio_pct / 100.0 if self.clip_ratio_pct else 1 / 3
-        return max(1, math.floor(full * ratio + 0.5))
+        return max(1, math.floor(full * self._effective_clip_ratio(bm) / 100.0 + 0.5))
 
     def _reload_total_duration(self, bm: BuffManager, t: float) -> float:
         """지금 재장전을 시작하면 **탄창이 다 찰 때까지** 걸리는 시간(초).
@@ -2211,7 +2247,7 @@ class CharState:
         if not self._is_clip_reload(bm):
             return one
         full = self._full_ammo(bm, t)
-        clips = math.ceil(max(0, full - self.ammo) / self._clip_gain(full))
+        clips = math.ceil(max(0, full - self.ammo) / self._clip_gain(full, bm))
         return one * max(1, clips)
 
     def _start_reload(self, t: float, bm: BuffManager, label: str = "재장전 시작",
@@ -2315,7 +2351,7 @@ class CharState:
         self._wc_ammo_full = None
         full = self._full_ammo(bm, t)
         if self._is_clip_reload(bm):
-            self.ammo = min(full, self.ammo + self._clip_gain(full))
+            self.ammo = min(full, self.ammo + self._clip_gain(full, bm))
             if self.ammo < full:
                 if self._sim_log is not None:
                     self._sim_log.ammo_log.append(AmmoLogEntry(t=t, caster=self.name, ammo=self.ammo))
@@ -2476,6 +2512,22 @@ class BurstController:
         # 이 목록이 채워져 있을 때만 재계산해서 둘을 구분한다.
         self._cd_wait_candidates: list[str] | None = None
 
+        # **딜레이 버스트** — 차례가 온 뒤 유저가 몇 초 뒤에 버튼을 누르나.
+        # 정본: `context/CONTROL.md` §딜레이 버스트. 캐릭터별 `control.burst.delay`에서
+        # 읽고 기본은 0(즉시)이라 안 주면 종전과 한 자리도 다르지 않다.
+        #
+        # **이 입력만 카메라를 요구하지 않는다.** 배타 자원은 카메라 한 대인데 버스트는
+        # 그걸 안 먹으므로 `_arbitrate_control()`의 대상이 아니다 — 조작자 배타의 예외다.
+        self._burst_delay: dict[str, float] = {}
+        for _c in squad:
+            _d = ((_c.get("control") or {}).get("burst") or {}).get("delay")
+            if _d:
+                self._burst_delay[_c["name"]] = float(_d)
+
+        # 지금 단계가 **열린** 시각. 딜레이는 `max(이 값, 그 사람 쿨 해제)`부터 잰다 ——
+        # 그게 곧 「버튼에 불이 들어온 시각」이다.
+        self._stage_open_t: float = -1.0
+
         # reenter 대기 중인 단계
         self._reenter_stage: str = ""
 
@@ -2559,7 +2611,7 @@ class BurstController:
                 # 새 사이클이 시작되는 순간 비운다 — 재진입 한도는 사이클당이다.
                 self._reenter_done_stages.clear()
                 self._phase = "stage:1"
-                self._next_action_t = t + self._burst_reaction
+                self._next_action_t = self._stage_open_t = t + self._burst_reaction
                 for n in self.squad_names:
                     bm.notify("burst_enter:1", t, n)
 
@@ -2602,7 +2654,8 @@ class BurstController:
                 self._reenter_done_stages.add(stage)
                 self._reenter_stage = stage
                 self._phase = f"reenter:{stage}"
-                self._next_action_t = t + self.config.get("burst_reenter_delay", 0.5)
+                self._next_action_t = self._stage_open_t = (
+                    t + self.config.get("burst_reenter_delay", 0.5))
             elif used:
                 if stage == "3":
                     self._phase = "switching"
@@ -2610,8 +2663,9 @@ class BurstController:
                 else:
                     next_stage = str(int(stage) + 1)
                     self._phase = f"stage:{next_stage}"
-                    self._next_action_t = (t + self.config.get("burst_switch_delay", 0.1)
-                                           + self._burst_reaction)
+                    self._next_action_t = self._stage_open_t = (
+                        t + self.config.get("burst_switch_delay", 0.1)
+                        + self._burst_reaction)
                     for n in self.squad_names:
                         bm.notify(f"burst_enter:{next_stage}", t, n)
             # used가 False면 전원 쿨타임 중이다. `_try_use_stage`가 잡아 둔 시각까지
@@ -2731,7 +2785,7 @@ class BurstController:
         사이클을 가정한 분기는 두지 않는다 — 불릴 일이 없는 분기는 검증되지 않는다.
 
             열림   = 지금 (fixed면 게이지 만충 시각까지 미룬다) + burst_reaction
-            누름ₖ  = min over 후보 n ( max(열림ₖ, 쿨 해제[n]) )
+            누름ₖ  = min over 후보 n ( max(열림ₖ, 쿨 해제[n]) + 딜레이[n] )
             열림ₖ₊₁ = 누름ₖ + burst_switch_delay + burst_reaction
             예측   = 누름₃ + 0.05                  (switching → 풀버스트 진입 딜레이)
 
@@ -2751,7 +2805,10 @@ class BurstController:
             cands = self._predict_candidates(stage)
             if not cands:
                 return -1.0   # 그 단계를 쓸 사람이 없다 — 사이클이 영영 안 돈다
-            at = min(max(at, self.burst_ready_at.get(n, 0.0)) for n in cands)
+            # 딜레이 버스트가 걸린 사람은 «불이 들어온 시각 + 딜레이»에 누른다 ——
+            # `_try_use_stage()`의 게이트와 글자 그대로 같은 식이다.
+            at = min(max(at, self.burst_ready_at.get(n, 0.0))
+                     + self._burst_delay.get(n, 0.0) for n in cands)
             if stage != "3":
                 at += self.config.get("burst_switch_delay", 0.1) + self._burst_reaction
         return at + 0.05
@@ -2850,6 +2907,21 @@ class BurstController:
                 continue
             if bm.is_stunned(name):
                 continue
+            # **딜레이 버스트.** 차례가 왔어도 지정한 만큼 기다렸다 누른다.
+            #
+            # **뒷사람이 대신 나가지 않는다.** 조작자가 한 명이라 버튼을 늦게 누르면 그
+            # 단계 전체가 밀린다 — 여기서 `continue` 하면 「미룬 게 아니라 건너뛴 것」이
+            # 되어 조작이 표현되지 않는다.
+            if (_d := self._burst_delay.get(name, 0.0)) > 0:
+                # **버튼에 불이 들어온 시각부터 잰다** = 단계가 열렸고 + 이 사람 쿨이 풀렸다.
+                # 단계가 열린 시각만 기준으로 삼으면, 쿨이 그보다 늦게 풀리는 사이클에서
+                # 딜레이가 조용히 무효가 된다 —— 지정한 조작이 아무 일도 안 하는 자리다.
+                press_at = max(self._stage_open_t, self.burst_ready_at.get(name, 0.0)) + _d
+                if t < press_at - 1e-9:
+                    # **쿨 대기 목록은 세우지 않는다.** 세우면 tick()의 쿨감 반영 분기가
+                    # `min()`으로 이 시각을 도로 앞당겨 딜레이가 사라진다.
+                    self._next_action_t = press_at
+                    return [], False, None
             events = self._cast_burst(name, stage, t, bm, state)
 
             # burst_stage_override:reenterN 버프 활성 여부 확인

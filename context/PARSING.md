@@ -554,7 +554,8 @@ n% ▲]`처럼 대괄호 안에 상태 이름을 적어 두더라도, 그 이름
 | `charge_time_caster_based` | (시전자 기준) 차지 시간 N초 ▼ (고정값, 초 단위) |
 | `charge_time_flat` | 차지 시간 N초 ▼ — `시전자 기준` 표기가 **없는** 절대값 감소 (▼면 values 음수). `시전자 기준`이 붙으면 `charge_time_caster_based` |
 | `charge_speed_overflow_conversion_pct` | 차지 속도 버프 합산이 100%를 초과할 때 초과분 × N% 만큼 `charge_dmg_pct` 추가. `fixed_value`에 변환 계수(%) 기입 |
-| `reload_speed_pct` | 재장전 속도 % ▲ |
+| `reload_speed_pct` | 재장전 **속도** % ▲ (1회에 걸리는 시간) |
+| `reload_ratio_pct` | 재장전 **비율** % ▲▼ (1회가 채우는 양). 원문 `재장전 비율 N% ▼` — 시간이 아니라 **횟수**가 바뀐다. 그레이브 `방열` |
 | `attack_speed_pct` | 공격 속도 % ▲ |
 | `mg_warmup_speed_pct` | MG 예열 진행 속도 % ▲ (▼는 음수). 100% 감소 시 예열 진행 중단. 텍스트: `머신건 예열 속도 N% ▲/▼` |
 | `accuracy_pct` | 명중률 % ▲ |

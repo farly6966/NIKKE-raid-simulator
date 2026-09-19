@@ -159,6 +159,11 @@ _BUFFS_ZERO: dict[str, Any] = {
     "accuracy_pct":     0.0,
     "normal_atk_dmg_pct": 0.0,
     "reload_speed_pct": 0.0,
+    # 재장전 **1회가 채우는 탄창 비율**에 곱해지는 %. 재장전 «속도»와 다른 축이다
+    # (그쪽은 1회에 걸리는 시간). 원문 「재장전 비율 N% ▼」 — 그레이브 `방열`.
+    # 50% ▼면 시간은 그대로고 **횟수가 두 배**다. 아군 재장전 속도 버프 a가 붙으면
+    # 두 모델은 `2×(1.5−a)` vs `4×(1−a)`로 a=50%에서만 우연히 같아진다.
+    "reload_ratio_pct": 0.0,
     "burst_cooldown":   0.0,  # 버스트 쿨타임 감소 (buff 상태로 지속)
     "max_hp_pct":       0.0,  # 최대 체력 + 현재 체력 동반 증가
     "max_hp_only_pct":  0.0,  # 최대 체력만 증가 (현재 체력 유지)
@@ -230,6 +235,7 @@ _STAT_TO_BUFF: dict[str, str] = {
     "accuracy_pct":         "accuracy_pct",
     "normal_atk_dmg_pct":   "normal_atk_dmg_pct",
     "reload_speed_pct":     "reload_speed_pct",
+    "reload_ratio_pct":     "reload_ratio_pct",
     "burst_cooldown":       "burst_cooldown",
     "max_hp_pct":           "max_hp_pct",
     "max_hp_only_pct":      "max_hp_only_pct",
