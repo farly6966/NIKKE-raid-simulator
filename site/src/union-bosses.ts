@@ -1,5 +1,6 @@
 import type { BattleSettings, BossPhase, ElementCode } from './types';
 import { decodeBattleCode } from './share-code';
+import defaultDecks from './data/union-default-decks.json';
 import recommendation from './data/union-s44-recommendation.json';
 import catalog from './data/union-seasons.json';
 import { DEFAULT_SYNCHRO_LEVEL } from './model';
@@ -81,4 +82,16 @@ export function recommendedUnionBattle(preset: UnionBossPreset): BattleSettings 
     immuneBlocksBurst: false,
     bossPhases: source.phases.map(w => ({ kind: w.kind as BossPhase['kind'], from: w.t0, to: w.t1 })),
   };
+}
+
+/**
+ * 빈 판을 열었을 때 얹는 **기본 편성**. 없으면 빈 배열이다.
+ *
+ * **저장된 판이 있으면 부르지 않는다** — 유저의 편성을 덮어쓰지 않는 것이
+ * 회차 전환(`applyPreset`)이 `decks`를 그대로 두는 것과 같은 규약이다.
+ * 정본과 출처는 `site/src/data/union-default-decks.json`.
+ */
+export function defaultUnionDecks(preset: UnionBossPreset): string[][] {
+  const season = (defaultDecks.seasons as Record<string, Record<string, string[][]>>)[preset.seasonId];
+  return (season?.[preset.id] ?? []).map(squad => [...squad]);
 }

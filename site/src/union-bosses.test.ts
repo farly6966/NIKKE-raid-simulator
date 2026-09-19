@@ -1,12 +1,15 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { UNION_BOSS_SEASONS, bossWeakness, recommendedUnionBattle, unionBossArt, unionSeasonForBosses } from './union-bosses';
+import { UNION_BOSS_SEASONS, bossWeakness, defaultUnionDecks, recommendedUnionBattle, unionBossArt, unionSeasonForBosses } from './union-bosses';
 import { decodeBattleCode, encodeBattleCode } from './share-code';
 import { decodeUnionDraft, encodeUnionDraft, readBossCode, readUnionCode, unionCodeOf } from './union-raid';
 import { requestForDeck, DEFAULT_SYNCHRO_LEVEL } from './model';
 import { setLang, t } from './i18n';
 import source from './data/union-s44-recommendation.json';
+import defaultDecks from './data/union-default-decks.json';
+import catalog from '../public/catalog.json';
+import { DECK_SLOTS } from './union-raid';
 
 afterEach(() => setLang('ko'));
 describe('union boss catalogue', () => {
@@ -84,5 +87,43 @@ describe('union boss catalogue', () => {
     expect(unionSeasonForBosses(board)?.id).toBe('s43');
     expect(unionSeasonForBosses([...board].reverse())).toBeUndefined();
     expect(unionSeasonForBosses(board.slice(0, 4))).toBeUndefined();
+  });
+});
+
+describe('union default decks', () => {
+  const names = new Set((catalog as Array<{ name: string }>).map(c => c.name));
+
+  it('only names nikke that exist — a typo would silently leave the slot empty', () => {
+    const squads = Object.values(defaultDecks.seasons)
+      .flatMap(season => Object.values(season as Record<string, string[][]>)).flat();
+    expect(squads.length).toBeGreaterThan(0);
+    for (const squad of squads) {
+      expect(squad).toHaveLength(5);
+      for (const name of squad) expect(names, name).toContain(name);
+    }
+  });
+
+  it('keys every entry to a boss that exists, and fits the deck slots', () => {
+    const ids = new Set(UNION_BOSS_SEASONS.flatMap(s => s.bosses.map(b => b.id)));
+    for (const [seasonId, bosses] of Object.entries(defaultDecks.seasons)) {
+      for (const [bossId, squads] of Object.entries(bosses as Record<string, string[][]>)) {
+        expect(bossId.startsWith(`${seasonId}-`), bossId).toBe(true);
+        expect(ids, bossId).toContain(bossId);
+        expect(squads.length).toBeLessThanOrEqual(DECK_SLOTS);
+      }
+    }
+  });
+
+  it('serves the newest season so a fresh board is not empty', () => {
+    const bosses = UNION_BOSS_SEASONS[0]!.bosses;
+    for (const boss of bosses) expect(defaultUnionDecks(boss).length, boss.id).toBeGreaterThan(0);
+    // 없는 회차는 빈 배열이다 — 기본 편성이 없다고 판이 깨지면 안 된다.
+    expect(defaultUnionDecks({ ...bosses[0]!, id: 's43-none', seasonId: 's43' })).toEqual([]);
+  });
+
+  it('hands back a copy — callers must not be able to edit the shipped defaults', () => {
+    const first = defaultUnionDecks(UNION_BOSS_SEASONS[0]!.bosses[0]!);
+    first[0]![0] = '바뀌면 안 된다';
+    expect(defaultUnionDecks(UNION_BOSS_SEASONS[0]!.bosses[0]!)[0]![0]).not.toBe('바뀌면 안 된다');
   });
 });

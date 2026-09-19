@@ -32,7 +32,7 @@ import { UnionSquadPicker } from './union-squad';
 import { cleanUnionCubes, applyUnionCubes, createUnionCubeEditor, type UnionCubes } from './union-cubes';
 import { createTimelineBlock } from './timeline';
 import { t } from './i18n';
-import { UNION_BOSS_SEASONS, unionBossPreset, unionBossArt, bossWeakness, recommendedUnionBattle,
+import { UNION_BOSS_SEASONS, unionBossPreset, unionBossArt, bossWeakness, defaultUnionDecks, recommendedUnionBattle,
   unionSeasonForBosses, type UnionBossPreset } from './union-bosses';
 import type { BattleSettings, DeckState, ElementCode, SimulationResult } from './types';
 
@@ -3048,7 +3048,27 @@ export function mountUnionRaid(hosts: UnionHosts, deps: UnionDeps): UnionHandle 
   }
 
   if (!restoredDraft || bosses.every(boss => !boss.name && !boss.code && !boss.decks.some(deck => deck.code))) {
-    bosses = bosses.map((boss, index) => applyPreset(boss, UNION_BOSS_SEASONS[0]!.bosses[index]!));
+    // **빈 판에만** 기본 편성을 얹는다. 저장된 판이나 불러온 판은 건드리지 않는다 —
+    // 회차 전환이 `decks`를 그대로 두는 것과 같은 규약이다(`applyPreset`).
+    // 명단에 없는 니케는 `readDeckCode`가 조용히 빼고 나머지만 채운다.
+    const names = deps.catalogNames();
+    bosses = bosses.map((boss, index) => {
+      const preset = UNION_BOSS_SEASONS[0]!.bosses[index]!;
+      const squads = defaultUnionDecks(preset);
+      const withPreset = applyPreset(boss, preset);
+      if (squads.length === 0) return withPreset;
+      return {
+        ...withPreset,
+        decks: withPreset.decks.map((deck, slot) => {
+          const squad = squads[slot];
+          if (!squad) return deck;
+          return readDeckCode({
+            ...deck,
+            code: encodeShareCode([{ id: 1, squad: [...squad], characters: {} }], false),
+          }, names);
+        }),
+      };
+    });
   }
   renderBosses();
   // 開起來就停在「聯盟」。匯出檔匯入不需要代理伺服器，所以沒設代理也一樣從這裡開始。
