@@ -2,9 +2,23 @@
 
 기존 Python 시뮬레이션 엔진을 웹 브라우저 안에서 실행하는 정적 스쿼드 대미지 계산기입니다.
 
-서비스: <https://moris-kr.github.io/nikke-calc/>
+서비스: <https://farly6966.github.io/NIKKE-raid-simulator/>
 
-원본 계산 엔진: <https://github.com/Jgaram/nikke-calc>
+## 이 포크에 대하여
+
+`Moris-kr/nikke-calc`의 포크이고, 계산 엔진의 원본은 <https://github.com/Jgaram/nikke-calc>다.
+이 포크가 더한 쪽은 **유니온 레이드(연합 돌격)** 다 — 32명 비교, 다섯 보스 판,
+보스 구간(`enemy["boss_phases"]`), 공유 코드, 회차 기본 편성.
+
+작업을 이어받는다면 **여기부터 읽는다**:
+
+| 알고 싶은 것 | 정본 |
+|---|---|
+| 에이전트 규약 · 문서 라우팅 (가장 먼저) | [`AGENTS.md`](AGENTS.md) |
+| 상류 이식이 어디까지 왔고 다음이 뭔가 | [`docs/上游移植-交接筆記.md`](docs/上游移植-交接筆記.md) |
+| 상류 commit별 이식 판정 (이식 장부 정본) | [`context/UPSTREAM-MAPPING.md`](context/UPSTREAM-MAPPING.md) |
+| 유니온 레이드 기능 전체 | [`docs/聯盟突襲-交接筆記.md`](docs/聯盟突襲-交接筆記.md) |
+| 회차 보스 카드 · 기본 편성 | [`docs/union-boss-catalog.md`](docs/union-boss-catalog.md) |
 
 ## 구조
 
@@ -42,7 +56,7 @@ npm install
 npm run dev
 ```
 
-Vite가 표시한 로컬 주소의 `/nikke-calc/` 경로로 접속하면 됩니다. 첫 계산 때 Pyodide를 내려받으므로 인터넷 연결이 필요하고 이후 브라우저 캐시를 활용합니다.
+Vite가 표시한 로컬 주소의 `/NIKKE-raid-simulator/` 경로로 접속하면 됩니다. 첫 계산 때 Pyodide를 내려받으므로 인터넷 연결이 필요하고 이후 브라우저 캐시를 활용합니다.
 
 ## 검증
 
@@ -78,7 +92,7 @@ npm run check-runtime
 
 ## 배포
 
-`master` 브랜치에 푸시하면 GitHub Actions가 의존성을 잠금 파일대로 설치하고 테스트와 프로덕션 빌드를 통과한 `site/dist`만 GitHub Pages에 배포합니다. Vite의 배포 기본 경로는 `/nikke-calc/`입니다.
+`master` 브랜치에 푸시하면 GitHub Actions가 의존성을 잠금 파일대로 설치하고 테스트와 프로덕션 빌드를 통과한 `site/dist`만 GitHub Pages에 배포합니다. Vite의 배포 기본 경로는 `/NIKKE-raid-simulator/`입니다 (`site/vite.config.ts`의 `base`).
 
 ### 블라블라링크 연동 (선택)
 
