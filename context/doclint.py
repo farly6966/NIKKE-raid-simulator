@@ -18,6 +18,11 @@
   F. ALIASES 정식 명칭 실재 · 원본/이격 주의 목록
   G. 프리뷰(출시 전 카드 파싱) 항목의 수명 — 출시됐는데 정식 등록 안 된 상태를 막는다
   H. 애장품 캐릭터의 스킬 판본 완비 여부 (실패로 잡지 않는 진행 상황 목록)
+  I. `data/char_defaults.json`의 컨트롤(무조건분 + `_control_rules`)이 조립이 받는
+     어휘인가, CONTROL.md 앵커 표 ↔ `timeline._ANCHORS`가 같은가.
+     조건부 규칙은 **조건이 맞는 스쿼드를 돌려야만** 조립까지 가므로, 아무도 안 돌린
+     규칙의 오타는 여기서만 잡힌다. 어휘를 여기서 다시 적지 않고 조립이 쓰는
+     `timeline.validate_control()`을 그대로 부른다 (정본 한 곳)
 
 키 매칭은 첫 콜론 이전 prefix 기준 (예: `hit_count:다탄두:3` ↔ 문서 `hit_count:N`).
 
@@ -41,6 +46,8 @@ SKILLS = ROOT / "data" / "parsed_skills.json"
 NIKKE = ROOT / "data" / "parsed_nikke.json"
 IMPL = ROOT / "context" / "IMPL-STATUS.md"
 CHARS = ROOT / "context" / "PARSING-CHARS.md"  # 현황 목록(완료/프리뷰/예정) 정본
+CONTROL = ROOT / "context" / "CONTROL.md"     # 컨트롤 스키마·앵커 표 정본
+CHAR_DEFAULTS = ROOT / "data" / "char_defaults.json"
 PREVIEW = ROOT / "scraper" / "preview_skills.json"  # 출시 전 카드 전사본
 SCRAPED = ROOT / "scraper" / "nikke_scraped.json"
 CALC = ROOT / "calculator"
@@ -563,6 +570,80 @@ def check_favorite() -> bool:
     return False
 
 
+# ── 검사 I: 컨트롤 어휘 ────────────────────────────────────────────────────
+
+_ANCHOR_TABLE_HEAD = "| 앵커 | 시각 | 게이트 |"
+
+
+def _doc_anchor_names() -> set[str]:
+    """CONTROL.md 앵커 표의 첫 칸(백틱 안 이름) 집합."""
+    lines = CONTROL.read_text(encoding="utf-8").splitlines()
+    try:
+        i = next(n for n, ln in enumerate(lines) if ln.strip() == _ANCHOR_TABLE_HEAD)
+    except StopIteration:
+        return set()
+    out: set[str] = set()
+    for ln in lines[i + 2:]:            # 헤더 + 구분줄 다음부터
+        if not ln.strip().startswith("|"):
+            break
+        cell = ln.split("|")[1].strip()
+        if m := _BACKTICK.search(cell):
+            out.add(m.group(1))
+    return out
+
+
+def check_control() -> bool:
+    """검사 I: 컨트롤 어휘가 닫힌 채로 남아 있는가.
+
+    `data/char_defaults.json`의 컨트롤은 **그 니케가 낀 스쿼드를 돌려야만** 조립까지
+    간다. `_control_rules`는 조건까지 맞아야 하므로 더하다 — 아무도 안 돌린 규칙의
+    오타는 테스트로도 baseline으로도 잡히지 않고, 조용히 「아무 일도 안 함」으로 남는다.
+
+    앵커 카탈로그는 문서에 표로도 적혀 있다. 표현력을 늘리는 자리라 문서가 코드보다
+    낡기 쉬우므로 **이름 집합만** 대조한다(시각·게이트 설명은 문서가 정본이다).
+    """
+    from calculator import timeline
+
+    print("\n=== I. 컨트롤 어휘 (char_defaults ↔ 조립 · CONTROL.md 앵커 표 ↔ 코드) ===")
+    bad: list[str] = []
+    total = 0
+    layers = json.loads(CHAR_DEFAULTS.read_text(encoding="utf-8"))
+    for name, layer in layers.items():
+        if not isinstance(layer, dict):
+            continue                      # 파일 머리의 `_comment` 등
+        if (ctrl := layer.get("control")) is not None:
+            total += 1
+            try:
+                timeline.validate_control(ctrl, f"char_defaults [{name}]")
+            except ValueError as ex:
+                bad.append(str(ex))
+        for i, rule in enumerate(layer.get("_control_rules") or []):
+            if (ctrl := rule.get("control")) is None:
+                continue
+            total += 1
+            try:
+                timeline.validate_control(ctrl, f"char_defaults [{name}] _control_rules[{i}]")
+            except ValueError as ex:
+                bad.append(str(ex))
+
+    doc_anchors = _doc_anchor_names()
+    if doc_anchors != set(timeline._ANCHORS):
+        for a in sorted(doc_anchors - set(timeline._ANCHORS)):
+            bad.append(f"CONTROL.md 앵커 표: {a!r}가 `timeline._ANCHORS`에 없다")
+        for a in sorted(set(timeline._ANCHORS) - doc_anchors):
+            bad.append(f"`timeline._ANCHORS`의 {a!r}가 CONTROL.md 앵커 표에 없다")
+
+    for b in bad:
+        print(f"  {b}")
+    if bad:
+        print("    → 스키마는 좁고 닫혀 있어야 한다. 어휘를 넓히려면 `timeline._ANCHORS`·"
+              "`_CLICK_WINDOWS`·`_CLICK_MODES`와 `context/CONTROL.md §설정 스키마`를 "
+              "함께 고친다")
+    else:
+        print(f"  (일치 — 컨트롤 {total}건 · 앵커 {len(doc_anchors)}종)")
+    return bool(bad)
+
+
 def main() -> int:
     used, chars = load_used()
     doc = load_documented()
@@ -613,6 +694,7 @@ def main() -> int:
     fail |= check_aliases()
     fail |= check_preview(chars)
     fail |= check_favorite()
+    fail |= check_control()
 
     if verbose:
         print("\n=== 키별 사용 캐릭터 수 (one-off = 1명 전용) ===")

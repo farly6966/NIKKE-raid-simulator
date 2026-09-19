@@ -96,6 +96,12 @@ class CharacterCustomizationTest(unittest.TestCase):
             normalize_character_overrides({
                 "control": {"reload": {"policy": "impossible"}},
             })
+        # 정책이 안 읽는 키는 **조용히 무시되지 않는다.** 조립도 끊지만, 그쪽에서
+        # 터지면 화면에서 어느 설정이 문제인지 알 수 없어 여기서 먼저 잡는다.
+        with self.assertRaises(ValueError):
+            normalize_character_overrides({
+                "control": {"reload": {"policy": "before_fb_end", "margin": 0.1}},
+            })
 
     def test_every_raw_extra_advantage_has_structured_target_code(self):
         root = Path(__file__).resolve().parents[1]

@@ -4,6 +4,8 @@
 為了不要用「看起來一樣」帶過，每個判定都附根據。
 
 **涵蓋率**：upstream 全歷史 86 筆（`ea82f76` 當時），本表目前判定 **43 筆**。
+未判定的 42 筆逐筆看過的結果（2026-09-19）：合併 5 · revert 對 4 · 文件／基礎建設 23 ·
+fork 已有的角色 6 · 不適用的重構 2 → **實際可做的剩 2 筆**，都在 D 區。
 其餘**還沒逐筆判定過** —— 沒進表不等於不適用，只等於沒看過。未判定的清單與分區
 待辦在 `docs/上游移植-交接筆記.md` §4。
 
@@ -54,7 +56,7 @@ git merge-base ce75361 Moris-kr/master  → f56124d
 | `927a613` | 「N 發維持」的增益自己破壞自己的條件 | **已移植** `5c2cf49` | `_has_runtime_cond()` 沒有 `duration_bullets` 參數。發數到期的增益 `expires_at` 留在 `inf`，通過了 runtime 重新評估的閘門，於是用 `not_self_state:` 擋重複施加的增益把自己關掉。影響貝斯蒂：戰術升級「飛彈導引」。連帶修正了 `parsed_skills.json` 的效果排列 |
 | `b3ec538` | 格拉維過熱 30·60 次計數器 | **已移植** `e2a2a21` | fork 的 `parsed_skills.json` 裡沒有「過熱命中」量表，`과열 II·III` 和「未來預知」同一瞬間一起開，30·60 次完全是裝飾。改用虛擬量表（累積 + 每次未來預知歸零）+ `passive` 登錄 + `gauge_above` 執行期判定。純資料，引擎不用動 |
 | `ace1a61` | 「武器變更狀態」總稱判定 | 不適用 | 上游的 parser 會吐出泛稱 `self_state:무기 변경`，所以引擎需要一個總稱分支（`_has_self_state` 的 `WEAPON_CHANGE_STATE`）。**fork 的 parser 解析成實際模式名** —— 목단「다 덤벼! 2」的條件是 `self_state:정정당당 승부다!`，而牠 `weapon_change` 項目的 `name` 正是同一個字串，字面比對就成立。`data/parsed_skills.json` 全檔 `self_state:무기 변경` 出現 **0 次**，泛稱這條路在 fork 到不了。日後若 parser 改成吐泛稱，這一列要重驗 |
-| `35d8c20` | 格拉維放熱：無限彈藥 + 掩體中斷裝填 | 部分移植 | 三件事。**`infinite_ammo` 已存在** —— fork 叫 `max_ammo_infinite`，`test_roster_batch06` 有釘。**掩體那半已移植** `7cf88f8`：有限掩體到期時收掉進行中的裝填（還有彈就當場切，0 發等下一個彈夾），`_finish_reload` 的 docstring 本來就記著這個缺口。⚠️ 判定要放在 `tick()` 的裝填完成檢查**之前** —— 那個檢查在裝填進行中就 `return`，加在 `_tick_cover` 裡是死碼。**還剩** `reload_ratio_pct`，見 A 區 `93ec10a` |
+| `35d8c20` | 格拉維放熱：無限彈藥 + 掩體中斷裝填 | 部分移植 | 三件事。**`infinite_ammo` 已存在** —— fork 叫 `max_ammo_infinite`，`test_roster_batch06` 有釘。**掩體那半已移植** `7cf88f8`：有限掩體到期時收掉進行中的裝填（還有彈就當場切，0 發等下一個彈夾），`_finish_reload` 的 docstring 本來就記著這個缺口。⚠️ 判定要放在 `tick()` 的裝填完成檢查**之前** —— 那個檢查在裝填進行中就 `return`，加在 `_tick_cover` 裡是死碼。`reload_ratio_pct` 已於 `2e7e775` 補完，見 A 區 `93ec10a` |
 
 ## A 區 —— 累積式爆裂量表（完成）
 
@@ -63,7 +65,7 @@ git merge-base ce75361 Moris-kr/master  → f56124d
 | `3935b6b` | 已移植 | `00c48ac` |
 | `f12fc35` | 已移植 | `9ef6b7d` —— `context/mechanics/버스트 게이지.md` |
 | `1246e2e` | 已移植 | `9ef6b7d` |
-| `93ec10a` | 部分移植 | `tap_fire.window` 在 `9ef6b7d`，裝填控制政策 C 在 `008da4b`，`ammo_charge_pct` 負值下限在 `d85ac2f`。「武器變更狀態」總稱判定移到下面 `ace1a61` 那一列判定（不適用）。**還剩**：`clip_count`（CDN `reload_bullet`）· `reload_ratio_pct`（格拉維「放熱」）—— 兩項同源，都要先把 `reload_bullet` 收進 `scraper/nikke_scraped.json`（**需使用者點頭重抓 CDN**，那是原始資料唯一正本） |
+| `93ec10a` | **已移植** `477ee18`·`2e7e775` | `tap_fire.window` 在 `9ef6b7d`，裝填控制政策 C 在 `008da4b`，`ammo_charge_pct` 負值下限在 `d85ac2f`。「武器變更狀態」總稱判定移到下面 `ace1a61` 那一列判定（不適用）。剩下的 `clip_count`·`reload_ratio_pct` 在使用者授權重抓 CDN（2026-09-19）後一起落地 —— 兩項同源。`clip_ratio_pct` 的正本改成 CDN `재장전 탄수`（對最大彈藥 ×10000），推導重現了手寫的 14 人並多出格拉維一人（手寫清單只看 SG·RL，看不到 AR 的 60 發分 30）。`reload_ratio_pct` 是**第二軸** —— `reload_speed_pct` 管一次要多久，這個管一次填多少 → 改變**次數**。格拉維「放熱」原本誤記成 `reload_speed_pct: -50`，兩個模型在友軍裝填速度 +50% 時剛好同值，所以一直沒露出來。回歸 `calculator/test_clip_reload_cdn.py` |
 | `cf0ef28` | 不適用 | 這個 commit 是上游把**自己測試用的 3 個編成**的裝填控制從常數（政策 A）換成政策 C。這個 fork 的 29 個 baseline 編成**一個控制設定都沒有**，沒有常數可以換。在 baseline 上新加操作屬於測試台設計決策，不是移植；而且預設模式還是 `fixed` 的期間，控制只會算成損失 |
 | `1300089` | 跳過 | `3b63720` 整個退掉了。中間型的校正常數（`ally_flat`）是上游自己註明「原因不明·離散 ±30%」，9 天後就移除了 |
 | `3b63720` | 已移植 | `a0fa513` |
@@ -76,15 +78,17 @@ git merge-base ce75361 Moris-kr/master  → f56124d
 | `8d16ea5`（클릭 스케줄） | `control.click` 統一 톡톡이／홀드 | **已移植** `8ae5faf` | 四窗 × 三模式，先匹配者勝，按下／放開分開詢問。舊鍵 desugar，**baseline 29/29 一格未動**。順帶拿掉 `_tick_charge` 重複的 `_hold_release_t < 0` 守衛 —— 留著排程順序沒有意義 |
 | `8d16ea5`（조작 모드） | `control_mode` solo／warn／strict | **已移植** `44b84c6` | 판정과 집행을 가른 게 핵심 —— `_want_burst_cover()`·`_want_reload_cover()`를 순수 판정으로 떼어내야 조율이 정책에 **부작용 없이** 물을 수 있다. `_arbitrate_control()`은 char tick **이전에** 돈다(안에서 정하면 스쿼드 자리가 답을 바꾼다). 뺏기면 엄폐 해제·홀드 발사, 앵커는 **앵커당 1회만** 되돌린다. baseline `레이드_라피앨리스` +0.10% —— 舊 행위는 카메라가 3번 자리(라피, **MG**)에 180초 묶여 풀차지 배율을 쓸 수 없는 사람에게 갔다 |
 | `c961351` | 카메라 경합依等級仲裁 | **已移植** `b60462a` | 상 30(버충 톡톡이·장전컨 C) · 중 20(엄폐컨·홀드컨) · 하 10(상시 톡톡이·장전컨 A·B) · 시퀀스 99. **같은 톡톡이라도 목적이 다르면 등급이 다르다.** 유지 요청은 연 정책의 등급을 물려받는다. baseline 무변동(그 편성은 둘 다 하) —— 그래서 조율 규칙 자체를 직접 세운 테스트를 붙였다 |
-| `ac8fe2a` | anchor 語法·window enum·裝填控制 3 政策 | 需移植 | 「언제」를 **앵커+오프셋**(`fb_end + 2초부터 4초간`)으로도 적게 한다. 현재 fork는 상태 창 넷만 있다 —— `context/CONTROL.md` §미구현·보류의 「톡톡이 구간 — 앵커식」 |
-| `544adeb` | 爆裂納入 control·第五按鈕·delayed burst | 需移植 | **priority 부분은 `b60462a`에 들어갔다.** 남은 것은 버스트를 다섯째 원시 입력으로 편입하는 것과 `_burst_delay`(사이클 안에서 몇 초 기다렸다 누르나) —— 후자가 없어서 `997170e`의 쿨타임 사슬에서 딜레이 항을 뺐다 |
-| `29c7ce1` | attachment schema 統一 | 需移植 | — |
-| `cf8c9ec` | runtime control condition 擴充 | 需移植 | — |
-| `ec774c7` | 武器變更中控制排程不能停住 | 需移植 | — |
+| `ac8fe2a` | anchor 語法·window enum·裝填控制 3 政策 | **已移植**（本 commit） | 「언제」를 `anchor + offset − minus` 한 줄로 적는다. **상태 창을 없애지 않는 것이 핵심** —— `burst_charge`의 판정은 게이지 가산이 쓰는 바로 그 값이라 시각으로 환산하면 두 구간이 어긋날 수 없다는 보장이 사라진다. 裝填控制三政策이 그 한 줄로 접히고, **앵커가 자기 게이트를 함께 드는 것이 회귀 0의 근거**다(A·C의 `full_burst` 요구, B의 관측치 요구). baseline 29/29 무변동에 더해 세 정책을 종전·앵커 두 표기로 각각 돌려 **총딜과 엄폐 시각이 한 자리도 안 다름**을 釘었다. fork 추가 둘: `reload.len`을 조용히 버리지 않게 `_norm_when`까지 넘기고(상류에 남아 있는 자리), 떼기 모드에 `combat_start`를 거는 것을 막는다(사이클당 1회 가드가 전투당 1회가 된다). doclint 검사 I 신설 —— `_control_rules`는 조건 맞는 스쿼드를 돌려야만 조립까지 가므로 **아무도 안 돌린 규칙**의 오타가 거기서만 잡힌다. §미구현 두 줄(톡톡이 임의 구간·구간별 풀차지 시점)이 함께 내려갔다 |
+| `544adeb` | 爆裂納入 control·第五按鈕·delayed burst | **已移植（機制）** `2e7e775` | priority 부분은 앞서 `b60462a`. 이번에 `control["burst"]["delay"]` —— 차례가 와도 바로 누르지 않는다. **뒷사람이 대신 누르지 않는 것**이 요점이다(조작자가 한 명이라 단계 전체가 밀릴 뿐 건너뛰지 않는다). `_predict_next_fb_start`에도 같은 항을 되살려 `997170e`에서 뺐던 딜레이 항이 돌아왔다 —— 예측식과 집행식이 어긋나면 정책 B·`if_dry`가 딜레이 조합에서만 조용히 빗나간다. **스키마 통합(`burst_pattern` → `control.burst.pattern`)은 안 옮겼다**: fork에는 `context/spec.py`가 관리하는 `_burst_patterns` 카탈로그와 사이트 저장 형식이 걸려 있어 호환 부담만 남는다 |
+| `29c7ce1` | attachment schema 統一 | **不適用** | 上游 자신의 파일 재편(`char_defaults`·`tactics`의 부착 규칙을 `_rules` 한 형식으로 통일)이 본체다. fork는 같은 일을 `_control_rules`·`_burst_pattern_rules` 두 목록으로 이미 하고 있고, 남는 것은 상류가 함께 넣은 **가드 전용 어휘 두 개**인데 fork의 세 규칙은 그것을 쓰지 않는다. 규칙 수가 늘어 어휘가 필요해지면 이 열을 다시 본다 |
+| `cf8c9ec` | runtime control condition 擴充 | **部分移植** `0452e4b` | 셋 중 **앵커에 기대지 않는 하나**를 먼저 옮겼다 —— `burst_chain` 창 + `hold_until_close` 모드. 차지형이 게이지 충족 후 1단계 버튼과 쿨을 기다리는 동안 **게이지가 더 이상 차지 않으므로** 다음 한 발을 들고 있다가 풀버스트와 동시에 놓는다. 떼는 시각이 **상수가 아니라 창이 닫히는 틱**이라 별도 모드가 필요하다. 창은 `state["burst_phase"]`로 판정한다 —— 90%처럼 미래 충전을 예상해 미리 들지 않으므로 이 컨트롤이 사이클을 늦출 수 없다. **남은 둘**(`own_buff_end` 앵커 · `gate` 키)은 이제 `ac8fe2a`가 들어왔으니 독립이다 |
+| `ec774c7` | 武器變更中控制排程不能停住 | **已移植** `2e7e775` | `CharState.tick()`의 무기 변경 분기가 컨트롤 실행층 **앞에서** `return`해, 모드가 켜진 동안(벨벳 MG 10초) 조작이 통째로 멈췄다. 게다가 시각을 지정한 명시 시퀀스는 버려지지도 않는다 —— `_pump_ctrl_seq`가 지나간 항목을 들고 있다가 조작이 다시 도는 첫 틱에 꺼내 써서 **지정 시각이 모드 종료 프레임으로 밀린다**. baseline 29/29 무변동(하네스 편성 중 무기 변경 구간에 조작을 지정한 것이 없다 —— 그래서 회귀가 못 잡던 자리다) |
 
-**남은 다섯은 「언제」를 적는 어휘를 넓히는 쪽이다.** 등급도 仲裁 본체도 섰다.
-`ac8fe2a`의 anchor+offset 구간, `544adeb`의 delayed burst, `29c7ce1`·`cf8c9ec`·`ec774c7`이
-남는다 —— 이제 서로 독립이라 하나씩 해도 된다.
+**B 區는 `cf8c9ec`의 남은 둘만 빼고 끝났다.** 「언제」를 적는 어휘가 `ac8fe2a`로
+앵커 문법까지 열렸고, `29c7ce1`은 不適用으로 판정했다. 남은 `own_buff_end` 앵커와
+`gate` 키는 앵커 문법 위에 올라가는 것이라 이제 독립적으로 할 수 있다 —— 다만
+`own_buff_end`는 버프 종료 시각을 앵커로 끌어오는 것이라 그 버프의 지연 resolve를
+앞당긴다(`context/CONTROL.md` §미구현·보류의 「버프 종료를 앵커로」).
 
 ## C 區 —— 從未逐筆判定的八筆（補稽核）
 
@@ -102,7 +106,7 @@ B 區之後回頭把剩下八筆逐筆看完。**這一區的收穫最大** —�
 | `f7f496c` | 小紅帽文件缺陷三件 | **已移植** `51cc240` | 三件**傷害都不動**。①`cover_during_delay` 沒走 `_pick()` 三層 → 實測層寫了也靜默忽略 ②小紅帽`레드 울프` 的實測值搬到 `weapon_delays._weapon_change`，並把三個效果名照原文順序歸位（`와일드 투스 4` 因此掛到模式進入本身）③`주목` 目標統一成 `self`。baseline 15 筆只有 L2／L3 的名稱·目標字串改變 |
 | `0ef5382` | 紅蓮：黑影解析值沒跟上上修 | 不適用 | fork 的 `calculator/test_priority_skill_data.py` **逐級對照原文**，10 級全部相符。這個缺陷在這裡不存在 |
 | `6db7427` | 技能文句一句都不丟——全數普查 A~D | 不移植（fork 側工作） | **`calculator/` 零改動**，純資料 316 行 + 文件。這是上游對自己名冊的普查結果，要照搬等於重做一次 fork 自己的原文普查。fork 有 `context/doclint.py` 管 200 人的完成清單，這件事應該在 fork 這邊自己做 |
-| `dfadc9a` | 發射機制·彈著群改由 CDN 導出 | **阻塞** | 依賴 CDN `roledata.shot_detail` 的 20 個欄位。`scraper/nikke_scraped.json` 裡 `shot_detail`·`maintain_fire_stance`·`input_type`·`rate_of_fire` 出現次數全部是 **0** —— 原始資料裡根本沒有。與 A 區 `93ec10a` 的 `clip_count`／`reload_ratio_pct` **同一個阻塞**：都要先重抓 CDN |
+| `dfadc9a` | 發射機制·彈著群改由 CDN 導出 | **已移植** `477ee18` | 使用者授權重抓 CDN（2026-09-19）後解除阻塞。**手寫的規則本來就在資料裡** —— `post_fire_delay` 是 `input_type`·`maintain_fire_stance` 的函數（UP 才有，`0.22 + max(0.16, 유지/100)`；DOWN_Charge 是 0），`cover_during_delay` 是 `UP and 유지 == 0`。手寫的 36 件裡 **34 件與推導式完全一致**（`cover_during_delay` 16/16 · 클립 14/14 · `post_fire_delay` 4/6），不一致的兩件都有影片實測註記，留在 `_exceptions` 第①層。對照表在 `context/DATA_VERIFY.md` §weapon_delays.json |
 
 **順帶找到、上游沒有的兩件**（做同類原文全檔普查時掉出來）：
 

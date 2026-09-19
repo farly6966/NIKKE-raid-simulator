@@ -186,6 +186,12 @@ def _normalize_control(raw: Any) -> dict[str, Any]:
         if policy not in {"before_fb_end", "into_fb"}:
             raise ValueError("재장전 정책은 before_fb_end 또는 into_fb여야 합니다")
         normalized_reload: dict[str, Any] = {"policy": policy}
+        # 정책이 안 읽는 키를 주면 조립(`timeline._build_reload_when`)이 끊는다 —
+        # 여기서 먼저 잡아 설정 검증 단계에서 알려 준다. 시뮬레이션 도중에 터지면
+        # 어느 설정이 문제인지 화면에서 알 수 없다.
+        unread = "margin" if policy == "before_fb_end" else "lead"
+        if unread in reload:
+            raise ValueError(f"{policy} 정책은 {unread} 값을 읽지 않습니다")
         for key in ("lead", "margin", "duration"):
             if key in reload:
                 normalized_reload[key] = _control_number(

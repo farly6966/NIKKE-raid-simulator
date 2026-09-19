@@ -106,7 +106,7 @@ class WindowMatchesTheStateMachineTest(unittest.TestCase):
                                 ("full_burst", False), ("", False)):
             with self.subTest(phase=phase):
                 bm.state["burst_phase"] = phase
-                self.assertIs(state._when_open(entry, bm), expected)
+                self.assertIs(state._when_open(entry, 0.0, bm), expected)
 
 
 if __name__ == "__main__":

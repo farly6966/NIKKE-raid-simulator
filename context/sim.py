@@ -31,7 +31,7 @@ if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8")  # 한글 에러 메시지가 콘솔 코드페이지로 깨지지 않게
 
 from calculator.sim_result import print_team_analysis
-from calculator.timeline import simulate
+from calculator.timeline import _ANCHORS, simulate
 from context import spec as char_spec
 
 VIEWS = ("summary", "breakdown", "analysis", "burst", "buff", "hits")
@@ -93,9 +93,25 @@ def main() -> None:
              "(context/CONTROL.md §톡톡이)",
     )
     ap.add_argument(
-        "--reload-ctrl", action="append", metavar="이름:정책[:값]",
-        help="장전컨. 정책은 before_fb_end(값=lead, 기본 0.3) 또는 into_fb(값=margin, 기본 0.1). "
-             "예: --reload-ctrl \"리버렐리오:into_fb\" (context/CONTROL.md §장전컨)",
+        "--click", action="append", metavar="이름:창|앵커:행위[:키=값,...]",
+        help="클릭 스케줄을 직접 적는다. 같은 캐릭터에 여러 번 주면 **준 순서대로** 쌓이고 "
+             "먼저 매치되는 항목이 이긴다. 셋째 칸은 상태 창(always·burst_charge·"
+             "burst_chain·own_full_burst·after_own_fb)이거나 앵커(combat_start·fb_end·"
+             "own_fb_end·next_fb_start)이고, 앵커면 offset=·len=으로 구간을 적는다. "
+             "행위는 tap·hold·hold_until_close·hold_judge. priority=high·mid·low로 "
+             "조작 등급을 덮어쓴다. "
+             "예: --click \"에이다:own_full_burst:hold:lead=0.5\" "
+             "--click \"프리카:own_fb_end:tap:offset=-6,len=6,rate=4.0\" "
+             "(context/CONTROL.md §설정 스키마)",
+    )
+    ap.add_argument(
+        "--reload-ctrl", action="append", metavar="이름:정책|앵커[:값][:키=값]",
+        help="장전컨. 종전 정책은 before_fb_end(값=lead, 기본 0.3) · into_fb(값=margin, "
+             "기본 0.1) · finish_by_fb_end(값=margin)이고, 앵커(fb_end·own_fb_end·"
+             "next_fb_start·combat_start)를 직접 적고 offset=·minus=reload_total을 줘도 된다. "
+             "예: --reload-ctrl \"리버렐리오:into_fb\" / "
+             "--reload-ctrl \"프리카:fb_end:offset=-0.1:minus=reload_total\" "
+             "(context/CONTROL.md §장전컨)",
     )
     ap.add_argument(
         "--cover-ctrl", action="append", metavar="이름:정책[:extend]",
@@ -204,14 +220,39 @@ def main() -> None:
             tap["full_charge_interval"] = float(parts[3])
         controls.setdefault(parts[0], {})["tap_fire"] = tap
 
+    for spec in (args.click or []):
+        parts = _split(spec.strip())
+        if len(parts) < 3:
+            print(f"--click 은 창(또는 앵커)과 행위가 필요하다: {spec!r}")
+            sys.exit(2)
+        # 셋째 칸은 **상태 창 이름이거나 앵커 이름**이다 — 어느 쪽인지는 앵커 카탈로그가
+        # 가른다(정본 한 곳). 앵커면 offset·len을 키=값으로 준다.
+        entry: dict = ({"anchor": parts[1]} if parts[1] in _ANCHORS
+                       else {"window": parts[1]})
+        entry["mode"] = parts[2]
+        for kv in (parts[3].split(",") if len(parts) > 3 else []):
+            k, _, v = kv.partition("=")
+            k = k.strip()
+            # 등급·동적 오프셋은 문자열이다 — 검증은 조립 시점(timeline)이 한다
+            entry[k] = v.strip() if k in ("priority", "minus") else float(v)
+        controls.setdefault(parts[0], {}).setdefault("click", []).append(entry)
+
     for spec in (args.reload_ctrl or []):
         parts = _split(spec.strip())
         if len(parts) < 2:
             print(f"--reload-ctrl 는 정책이 필요하다: {spec!r}")
             sys.exit(2)
-        rl: dict = {"policy": parts[1]}
-        if len(parts) > 2:
-            rl["lead" if parts[1] == "before_fb_end" else "margin"] = float(parts[2])
+        # 정책 자리도 **정책 이름이거나 앵커 이름**이다.
+        rl: dict = {"anchor": parts[1]} if parts[1] in _ANCHORS else {"policy": parts[1]}
+        for extra in parts[2:]:
+            if extra == "if_dry":
+                rl["if_dry"] = True
+            elif "=" in extra:
+                k, _, v = extra.partition("=")
+                k = k.strip()
+                rl[k] = v.strip() if k in ("priority", "minus") else float(v)
+            else:
+                rl["lead" if parts[1] == "before_fb_end" else "margin"] = float(extra)
         controls.setdefault(parts[0], {})["reload"] = rl
 
     for spec in (args.cover_ctrl or []):
