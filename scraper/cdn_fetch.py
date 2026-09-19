@@ -226,6 +226,20 @@ def adapt(role: dict) -> tuple[str, dict]:
             "버스트게이지(발당)": shot.get("burst_energy_pershot", 0),
             "버스트게이지(대상)": shot.get("target_burst_energy_pershot", 0),
             "버스트게이지(풀차지)": shot.get("full_charge_burst_energy", 0),
+            # ── 발사 입력·자세 (deprecated 하드코딩을 대신한다) ──────────────
+            # 손으로 찍어 둔 딜레이 예외가 이 세 필드와 그대로 겹친다.
+            #   post_fire_delay   = 0 (DOWN_Charge) · 0.22 + max(0.16, stance/100) (그 외)
+            #   cover_during_delay = input_type == "UP" and stance == 0
+            # 실측 대조: stance=0인 198명이 0.38 —— `_defaults_by_weapon_type`의
+            # RL/SR 실측값과 정확히 같다. 해석의 정본은 `context/DATA_VERIFY.md`.
+            "입력 타입": shot.get("input_type", ""),
+            "사격 자세 유지": shot.get("maintain_fire_stance", 0),
+            # UP인데도 0이 아니면 «떼는 순간이 아니라 정해진 시점에» 나간다 —
+            # 톡톡이(짧게 끊어치기)가 불가능한 셋이 여기서 갈린다(홍련 : 흑영·A2·레이븐).
+            "떼기 발사 시점": shot.get("uptype_fire_timing", 0),
+            # 한 번의 재장전 동작이 채우는 탄 수(1/100). 클립식 산탄총의 «탄창당 N발»이다.
+            "재장전 탄수": shot.get("reload_bullet", 0),
+            "재장전 시작 잔탄": shot.get("reload_start_ammo", 0),
             "무기스킬": render_weapon_skill(shot),
         },
         "스킬": skills,

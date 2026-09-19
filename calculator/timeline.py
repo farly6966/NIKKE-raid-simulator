@@ -394,7 +394,10 @@ class CharState:
         self.reload_start_delay: float = _delay_exc.get(
             "reload_start_delay", _delay_wt.get("reload_start_delay", 0.0))
         # 엄폐 니케: 재장 ≥100%일 때 post_fire_delay 중 자동재장전 (장탄 유지)
-        self.cover_during_delay: bool = _delay_exc.get("cover_during_delay", False)
+        # ②층이 CDN 유도값이다 —— `input_type == "UP" and maintain_fire_stance == 0`.
+        # 손으로 적어 둔 ①층은 CDN과 어긋날 때만 남긴다(`weapon_delays.json _comment`).
+        self.cover_during_delay: bool = _pick(
+            "cover_during_delay", _delay_exc, weapon_data, default=False)
         self._pending_auto_reload: bool = False
 
         # 발사 메카닉 3계층 해석 (_pick 참조). 무기군 기본값의 MG 곡선은 fire_rate_min
@@ -428,10 +431,27 @@ class CharState:
                 self.charge_time_base: float = charge_time_raw / 60.0
             else:
                 self.charge_time_base = weapon_data["charge_time"]
-            self.post_fire_delay: float = _delay_exc.get("post_fire_delay", _delay_wt.get("post_fire_delay", mech.get("post_fire_delay", 0.0)))
+            # ②층이 CDN 유도값이다 —— `DOWN_Charge`면 0, `UP`이면
+            # `0.22 + max(0.16, maintain_fire_stance/100)`. 자세가 0인 UP 무기가
+            # 전부 0.38로 떨어지는데, 그것이 곧 ③층에 사람이 재어 둔 RL/SR 기본값이다.
+            self.post_fire_delay: float = float(_pick(
+                "post_fire_delay", _delay_exc, weapon_data, _delay_wt, mech, default=0.0))
         else:
             self.charge_time_base = 0.0
             self.post_fire_delay = 0.0
+        # 풀차지 전용(`DOWN_Charge`) 무기의 **발사 주기 하한**. 차지 속도 버프가 차지를
+        # 0초로 만들면 주기를 잡아 주는 것이 아무것도 없어 매 프레임 발사가 된다.
+        # 게임에는 연사 상한이 있고, 그 값이 CDN `rate_of_fire`다(신데렐라 180rpm = 1/3초).
+        #
+        # **`weapon_delays.json`의 신데렐라 `post_fire_delay: 0.33`이 바로 이것이었다.**
+        # 딜레이가 아니라 주기 하한을 대신 막고 있던 값이고, 정체는 60/180 = 0.3333이다.
+        # 같은 구멍이 라플라스 : 얼티밋 히어로(`예열`)에도 열려 있었다.
+        # `fire_rate`는 이미 초당 발수다(parse_nikke가 rpm/60으로 환산) → 주기는 그 역수.
+        self._min_fire_cycle: float = (
+            1.0 / float(weapon_data["fire_rate"])
+            if weapon_data.get("input_type") == "DOWN_Charge" and weapon_data.get("fire_rate")
+            else 0.0)
+        self._last_fire_t: float = -1.0
         self._charge_phase: str = "ready"
         self._charge_start_t: float = 0.0
         self._charge_end_t: float = 0.0
@@ -440,12 +460,16 @@ class CharState:
         # SG (계수를 나누는 단위. 히트 수는 self.muzzles를 곱한 값)
         self.pellets: int = int(_pick("pellets", _delay_exc, weapon_data, mech, default=1))
 
-        # 클립 무기 여부 (일부 SG/RL). `reload_time`에 적힌 짧은 값은 **클립 1회** 시간이고,
-        # 한 번에 채우는 건 탄창의 1/3뿐이다. 오토는 이 클립 장전을 3연속으로 굴려 탄창을
-        # 채우므로 빈 탄창에서의 실효 재장전 시간은 `reload_time × 3` — 일반 무기와 비슷해진다
+        # 클립 무기 여부. `reload_time`에 적힌 짧은 값은 **클립 1회** 시간이고, 한 번에
+        # 채우는 건 탄창의 일부뿐이다. 오토는 이 클립 장전을 탄창이 찰 때까지 연속으로
+        # 굴리므로 빈 탄창에서의 실효 재장전은 `reload_time × 클립 수`가 된다
         # (유저 확인, 2026-08-19). 처리는 _finish_reload()·_reload_total_duration().
-        _clip_chars = _MECHANICS.get("clip_characters", {}).get(self.weapon_type, [])
-        self.is_clip: bool = self.name in _clip_chars
+        #
+        # **정본은 CDN `reload_bullet`이다**(`clip_ratio_pct` = 최대 장탄 대비 %).
+        # 종전의 손 목록 14명과 한 명도 어긋나지 않았고, AR이라 아무도 눈치채지 못한
+        # 그레이브(60발을 30발씩 두 번)가 하나 더 드러났다.
+        self.clip_ratio_pct: float = float(weapon_data.get("clip_ratio_pct") or 0.0)
+        self.is_clip: bool = 0.0 < self.clip_ratio_pct < 100.0
 
         self._in_weapon_change: bool = False
         # 이 재장전이 무기 변경 모드 안에서 시작됐는가 (모드 탄창 vs 원래 무기 탄창)
@@ -1209,6 +1233,14 @@ class CharState:
                 # 대기 중에도 charging=True라 "차지 중" 조건 버프가 유지된다 (실제 게임과 동일).
                 if self._hold_release_t >= 0 and t < self._hold_release_t:
                     return events
+            # **발사 주기 하한** (`DOWN_Charge` 전용). 차지 속도 버프가 유효 차지를
+            # 0초로 만들면 주기를 잡아 주는 것이 없어 매 프레임 발사가 된다. 게임의
+            # 연사 상한이 CDN `rate_of_fire`이므로 그 역수를 **사격에서 사격까지**의
+            # 하한으로 건다 —— 차지가 이미 그보다 길면 아무 일도 하지 않는다.
+            if (self._min_fire_cycle > 0.0 and self._last_fire_t >= 0.0
+                    and t < self._last_fire_t + self._min_fire_cycle - 1e-9):
+                return events
+            self._last_fire_t = t
             events.extend(self._charge_fire(t, bm, enemy, cfg, is_full))
 
         elif self._charge_phase == "post_delay" and t >= self._post_delay_end_t:
@@ -2155,14 +2187,18 @@ class CharState:
         return self.is_clip and bm.get_weapon_change(self.name) is None
 
     def _clip_gain(self, full: int) -> int:
-        """클립 1회가 채우는 발수 = **현재** 최대 장탄의 1/3을 **반올림**한 값 (유저 확인, 2026-08-19).
+        """클립 1회가 채우는 발수 = **현재** 최대 장탄 × CDN 비율, **반올림** (유저 확인, 2026-08-19).
+
+        비율의 정본은 CDN `reload_bullet`이다(SG·RL 33%, 그레이브 50%). 33%는 종전의
+        `1/3` 하드코딩과 같은 값이라 그 14명은 한 발도 안 움직인다.
 
         장탄 증가 버프가 붙으면 클립당 발수도 같이 커진다 → 빈 탄창은 대개 3회로 찬다.
         다만 반올림이 내려가는 장탄(31발 → 클립 10발)에서는 30발까지 채운 뒤 남은 1발을
         채우는 **4번째 클립**이 붙는다. 올림으로 두면 이 한 번이 사라져 재장전이 짧아진다.
         `round()`가 아니라 `floor(x + 0.5)`인 이유는 파이썬의 은행가 반올림을 피하기 위함이다.
         """
-        return max(1, math.floor(full / 3 + 0.5))
+        ratio = self.clip_ratio_pct / 100.0 if self.clip_ratio_pct else 1 / 3
+        return max(1, math.floor(full * ratio + 0.5))
 
     def _reload_total_duration(self, bm: BuffManager, t: float) -> float:
         """지금 재장전을 시작하면 **탄창이 다 찰 때까지** 걸리는 시간(초).

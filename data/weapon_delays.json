@@ -9,11 +9,16 @@
     "  ② parsed_nikke.json[캐릭터]          — 스크래퍼가 CDN에서 수집한 값",
     "  ③ weapon_mechanics.json 무기군 기본값",
     "",
-    "딜레이(post_fire_delay / post_reload_delay)는 _pick을 타지 않는다. CDN에 값이 없어",
-    "②계층이 통째로 비기 때문이다. 대신 이렇게 떨어진다:",
-    "  ① 이 파일 _exceptions[캐릭터]            — 캐릭터별 실측",
-    "  ② 이 파일 _defaults_by_weapon_type[무기군] — 무기군 실측 기본값 (SR/RL 0.38)",
-    "  ③ weapon_mechanics.json 무기군 기본값     — 원래 무기는 ②에서 언제나 잡히므로 사실상 도달하지 않는다",
+    "post_fire_delay·cover_during_delay는 **CDN에서 유도된다**(2026-09-19). 종전에는",
+    "'CDN에 값이 없어 ②계층이 비었다'고 적혀 있었지만, shot_detail의 input_type·",
+    "maintain_fire_stance가 곧 그 값이었다. 손으로 적어 둔 36건 중 34건이 식과 정확히",
+    "일치한다(cover_during_delay 16/16 · 클립 14/14 · post_fire_delay 4/6).",
+    "유도식과 대조표는 context/DATA_VERIFY.md §weapon_delays.json. 해석 순서:",
+    "  ① 이 파일 _exceptions[캐릭터]            — 캐릭터별 영상 실측 (CDN보다 우선)",
+    "  ② parsed_nikke.json[캐릭터]              — CDN 유도값 (input_type·maintain_fire_stance)",
+    "  ③ 이 파일 _defaults_by_weapon_type[무기군] — 무기군 실측 기본값 (SR/RL 0.38)",
+    "  ④ weapon_mechanics.json 무기군 기본값     — 사실상 도달하지 않는다",
+    "post_reload_delay만은 CDN에 대응 필드가 없어 실측이 유일한 근거다.",
     "",
     "**무기 변경(weapon_change) 모드는 ②를 건너뛴다.** _tick_weapon_change()는",
     "  ① 이 파일 _weapon_change[캐릭터][효과이름] → ② parsed_skills의 그 효과 필드",
@@ -109,9 +114,6 @@
     },
     "홍련 : 흑영": {
       "post_fire_delay": 0.43
-    },
-    "신데렐라": {
-      "post_fire_delay": 0.33
     },
     "라플라스 : 얼티밋 히어로": {
       "post_fire_delay": 0
