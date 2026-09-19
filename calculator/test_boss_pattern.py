@@ -10,14 +10,15 @@
 
 포맷·검사 규칙의 정본은 `calculator/boss_pattern.py` 모듈 docstring.
 
-fork 주의: 이 repo에는 이미 `enemy["boss_phases"]`(평평한 시간 창 여섯 종 —
-core·parts·immune·element_gate·pierce_gate·optimal_range)가 있고 Boss Maker·연합
-다섯 왕이 그걸 쓴다. **두 축은 서로를 모른다.** 통합은 등가 증명을 따로 세운 뒤에 한다.
+fork 고유의 `enemy["boss_phases"]`(평평한 시간 창 여섯 종)는 **같은 스케줄러 위로
+옮겼다** — `phases_to_patterns()`가 편다. 입력 형식은 그대로라 Boss Maker·연합 다섯 왕이
+저장해 둔 판은 그대로 돈다. 등가의 기준은 `calculator/test_boss_phase_numbers.py`가
+통일 전 숫자를 박아 둔 것이고, 의미 쪽은 `calculator/test_union_boss_phases.py`가 釘는다.
 """
 import unittest
 
 from calculator.boss_pattern import (OVERLAY_FIELDS, BossScript, legacy_to_patterns,
-                                     validate)
+                                     phases_to_patterns, validate)
 from calculator.damage import is_element_match
 from calculator.sim_result import HitEvent
 from calculator.timeline import simulate
@@ -44,6 +45,9 @@ def _run(patterns, until_t, hits=None, base=None):
         fired += [(t, e) for e in boss.begin_frame(t, enemy)]
         frames.append((t, dict(enemy), boss.vanished))
         for ev in (hits(t) if hits else []):
+            # 딜 게이트는 **히트 자신의 시각**으로 판정한다(모듈 docstring §딜 게이트).
+            # 실제 엔진의 HitEvent는 난 시각을 달고 오므로 여기서도 찍어 준다.
+            ev.t = t
             if boss.admit(ev, t):
                 admitted.append(ev)
         t += DT
@@ -427,6 +431,106 @@ class PatternsChangeARealBattleTest(unittest.TestCase):
                         "spec": {"damage_pct": 300}}], duration=10.0)
         self.assertEqual(r.boss_unmodeled, ["광역기"])
         self.assertIn("효과 모델 없음", r.boss_summary())
+
+
+class PhasesConvertToPatternsTest(unittest.TestCase):
+    """fork `boss_phases` → 패턴. **숫자 등가는 `test_boss_phase_numbers.py`가 釘는다** —
+    여기서는 변환 자체의 규약과 거절을 본다."""
+
+    ENEMY = {"code": "전격", "core_px": 600, "optimal_range_weapons": ["SR"]}
+
+    def _conv(self, phases, **extra):
+        return phases_to_patterns({**self.ENEMY, **extra, "boss_phases": phases})
+
+    def _ids(self, conv):
+        return [p["id"] for p in conv["patterns"]]
+
+    def test_no_phases_is_a_passthrough(self):
+        e = dict(self.ENEMY)
+        self.assertEqual(phases_to_patterns(e), e)
+        self.assertNotIn("patterns", phases_to_patterns(e))
+
+    def test_every_converted_script_validates(self):
+        conv = self._conv([
+            {"kind": "core", "from": 3, "to": 11},
+            {"kind": "parts", "from": 0, "to": 6},
+            {"kind": "immune", "from": 13, "to": 15},
+            {"kind": "pierce_gate", "from": 1, "to": 2},
+            {"kind": "element_gate", "from": 4, "to": 8},
+            {"kind": "optimal_range", "from": 8, "to": 20, "weapons": ["MG"]}])
+        validate(conv["patterns"], weapon_types=frozenset({"MG", "SR"}))
+        self.assertEqual(len(conv["patterns"]), 6)
+
+    def test_core_windows_drop_the_base_core(self):
+        """창 안에서는 적의 코어, **밖에서는 0**이 종전 규약이다."""
+        conv = self._conv([{"kind": "core", "from": 3, "to": 11}])
+        self.assertEqual(conv["core_px"], 0)
+        core = next(p for p in conv["patterns"] if p["kind"] == "core")
+        self.assertEqual(core["core_px"], 600)
+        self.assertEqual((core["delay"], core["until"]["time"]), (3.0, 8.0))
+
+    def test_core_windows_with_no_core_produce_nothing(self):
+        """코어가 0인 적에게 코어 창을 줘도 열 코어가 없다 — `core_px > 0` 검사에 걸린다."""
+        conv = self._conv([{"kind": "core", "from": 3, "to": 11}], core_px=0)
+        self.assertEqual(conv["patterns"], [])
+
+    def test_parts_window_emits_destroy_at_its_end(self):
+        conv = self._conv([{"kind": "parts", "from": 2, "to": 9}])
+        part = conv["patterns"][0]
+        self.assertEqual(part["emit_end"], ["event:part_destroy"])
+        self.assertEqual(part["targets"][0]["hp"], 0, "깨지는 표적으로 만들면 안 된다")
+
+    def test_element_gate_becomes_a_shield_of_the_enemy_code(self):
+        conv = self._conv([{"kind": "element_gate", "from": 0, "to": 5}])
+        self.assertEqual(conv["patterns"][0]["kind"], "shield")
+        self.assertEqual(conv["patterns"][0]["code"], "전격")
+
+    def test_element_gate_without_an_enemy_code_is_refused(self):
+        """적 코드가 판정 기준인데 그게 없으면 **전부 막힌다** — 조용히 두지 않는다."""
+        with self.assertRaises(ValueError) as cm:
+            self._conv([{"kind": "element_gate", "from": 0, "to": 5}], code="")
+        self.assertIn("적 코드", str(cm.exception))
+
+    def test_overlapping_ranges_are_split_so_the_earlier_one_wins(self):
+        """`move`는 **나중에 열린 것**이 이기는데 종전 창은 **먼저 시작한 것**이 이긴다 —
+        경계로 잘라 겹치지 않게 펴서 그 차이를 없앤다."""
+        conv = self._conv([
+            {"kind": "optimal_range", "from": 0, "to": 12, "weapons": ["SG"]},
+            {"kind": "optimal_range", "from": 4, "to": 20, "weapons": ["MG"]}])
+        moves = [p for p in conv["patterns"] if p["kind"] == "move"]
+        spans = [(p["delay"], p["delay"] + p["until"]["time"]) for p in moves]
+        self.assertEqual(spans, [(0.0, 4.0), (4.0, 12.0), (12.0, 20.0)])
+        # 0~12는 먼저 시작한 SG 창이 이기고, 12부터는 MG 창만 남는다.
+        # 정적 목록(SR)과는 **합집합**이다.
+        self.assertEqual([p["weapons"] for p in moves],
+                         [["SR", "SG"], ["SR", "SG"], ["SR", "MG"]])
+
+    def test_zero_length_windows_are_dropped(self):
+        """`to <= from`은 `lo <= t < hi`가 공집합이라 종전에도 한 프레임도 안 열렸다."""
+        self.assertEqual(self._conv([{"kind": "immune", "from": 5, "to": 5}])["patterns"], [])
+        self.assertEqual(self._conv([{"kind": "immune", "from": 5, "to": 4}])["patterns"], [])
+
+    def test_unknown_phase_kind_is_refused(self):
+        with self.assertRaises(ValueError) as cm:
+            self._conv([{"kind": "groggy", "from": 0, "to": 5}])
+        self.assertIn("모르는 boss_phases kind", str(cm.exception))
+
+    def test_both_axes_at_once_is_refused(self):
+        """같은 일을 두 형식으로 적으면 어느 쪽이 이기는지가 조용한 규칙이 된다."""
+        with self.assertRaises(ValueError):
+            phases_to_patterns({**self.ENEMY,
+                                "boss_phases": [{"kind": "immune", "from": 0, "to": 1}],
+                                "patterns": [{"kind": "idle"}]})
+
+    def test_the_engine_still_takes_boss_phases_as_input(self):
+        """**입력 형식은 안 바뀐다** — Boss Maker·연합 다섯 왕이 저장해 둔 판이 그대로 돈다."""
+        squad = build_squad(["리타", "크라운", "레이븐", "앨리스"])
+        cfg = build_config(squad, {"duration": 12, "rng_mode": "expected"})
+        r = simulate(squad, config=cfg, enemy={
+            "code": "전격", "core_px": 0,
+            "boss_phases": [{"kind": "immune", "from": 0, "to": 180}]}, verbose=True)
+        self.assertEqual(r.squad_total, 0, "무적 구간인데 딜이 들어갔다")
+        self.assertTrue(r.boss_log, "패턴으로 펴지지 않았다")
 
 
 if __name__ == "__main__":

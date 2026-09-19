@@ -13,6 +13,10 @@
 - **보스 패턴**: 위 스칼라들을 시간에 따라 덮어쓰는 스크립트 (`enemy["patterns"]`).
   비어 있으면 스케줄러를 만들지 않아 종전과 한 자리도 같다. 포맷의 정본은
   `calculator/boss_pattern.py`, 배선은 `context/CALCULATOR.md` §보스 패턴.
+- **회차 보스 구간** (`enemy["boss_phases"]`): 평평한 시간 창 여섯 종
+  (core·parts·immune·element_gate·pierce_gate·optimal_range). 입력 형식은 그대로 받고
+  엔진이 `phases_to_patterns()`로 펴서 같은 스케줄러에 태운다. **「무적」은 딜을 전부
+  막는다** (유저 확인 2026-09-19) — 上游 `vanish`(평타만)와는 다른 종류다.
   켜진 무기군의 **일반 공격**에만 ③ 보너스 **+30% 가산**이다 — 스킬 대미지에는 붙지
   않는다(`damage._factor3`). 곱이 아니라 가산이라, 크리·풀버스트(+50%)·코어가 이미
   들어간 합에서는 실제 상승폭이 30%보다 작다 (표준 스쿼드 SMG 단독 적용에서 리타

@@ -20,7 +20,8 @@ import random
 from typing import Any
 
 from .base_stat import calc_base_stats
-from .boss_pattern import BossScript, validate as validate_boss_patterns
+from .boss_pattern import (BossScript, phases_to_patterns,
+                           validate as validate_boss_patterns)
 from .buff_manager import (
     BuffManager, _QUANT_PARTS_KEY, _get_skill_lv,
     BURST_GAUGE_EXCEPTIONS,
@@ -3894,6 +3895,14 @@ def simulate(
 
     cfg = {**DEFAULT_CONFIG, **(config or {})}
     enm = {**DEFAULT_ENEMY, **(enemy or {})}
+    # fork 고유 `boss_phases`(평평한 시간 창 여섯 종)는 **같은 뜻의 패턴으로 펴서** 한
+    # 스케줄러에 태운다 — 같은 일을 하는 두 구현을 나란히 두지 않는다. 등가의 기준은
+    # `calculator/test_boss_phase_numbers.py`가 통일 전 숫자를 박아 둔 것이다.
+    # 부위 파괴 주기(`part_break_interval`)는 창이 있으면 안 걸리므로 편 뒤에도 알 수 있게
+    # 먼저 본다.
+    _has_part_windows = any(w.get("kind") == "parts" for w in (enm.get("boss_phases") or []))
+    if enm.get("boss_phases"):
+        enm = phases_to_patterns(enm)
     # 보스 패턴은 무거운 초기화보다 먼저 검사한다 — 잘못 적은 스크립트는 즉시 실패시킨다.
     boss_patterns = (validate_boss_patterns(enm["patterns"], weapon_types=_WEAPON_TYPES)
                      if enm.get("patterns") else None)
@@ -4340,17 +4349,8 @@ def simulate(
         result.char_total[ev.caster] += ev.damage
         _apply_lifesteal(ev, bm, base_stats, t)
 
-    # 戰鬥開始技能也必須使用 0 秒的 Boss 狀態。
-    _base_core_px = enm.get("core_px", 0)
-    _base_range = list(enm.get("optimal_range_weapons", []))
-    _initial_phases = enm.get("boss_phases") or []
-    _initial_core = [w for w in _initial_phases if w["kind"] == "core"]
-    if _initial_core and not any(w["from"] <= 0 < w["to"] for w in _initial_core):
-        enm["core_px"] = 0
-    _initial_range = sorted((w for w in _initial_phases if w["kind"] == "optimal_range"), key=lambda w: w["from"])
-    if _initial_range:
-        enm["optimal_range_weapons"] = list(dict.fromkeys([*_base_range, *next(
-            (w.get("weapons", []) for w in _initial_range if w["from"] <= 0 < w["to"]), [])]))
+    # 戰鬥開始技能也必須使用 0 秒的 Boss 狀態 —— 그 일은 아래 `boss.begin_frame(0.0)`가
+    # `bm.battle_start()`보다 먼저 돌면서 한다.
     # 보스 상태는 전투 시작 효과보다도 먼저 정한다 — t=0 프레임의 누구도 기본 상태를 읽으면
     # 안 된다(`core_hit` 조건의 전투 시작 버프 등). 이때 나온 이벤트는 루프 첫 프레임의
     # 통지 자리에서 나간다. 루프의 t=0 호출은 전이가 이미 끝나 있어 아무것도 안 한다.
@@ -4374,17 +4374,6 @@ def simulate(
     _part_break_interval = float(cfg.get("part_break_interval", 0) or 0)
     _next_part_break = _part_break_interval if _part_break_interval > 0 else math.inf
     # 회차 추천 설정의 부위 구간. 겹쳐도 파츠 보너스는 한 번, 파괴는 부위마다 발생한다.
-    _boss_phases = enm.get("boss_phases") or []
-    _part_windows = [(float(w["from"]), float(w["to"])) for w in _boss_phases if w["kind"] == "parts"]
-    _part_ends = sorted(hi for _, hi in _part_windows)
-    _part_cursor = 0
-    _static_parts = enm.get("has_parts", False)
-    _all_immune = [(float(w["from"]), float(w["to"])) for w in _boss_phases if w["kind"] == "immune"]
-    _core_windows = [(float(w["from"]), float(w["to"])) for w in _boss_phases if w["kind"] == "core"]
-    _pierce_windows = [(float(w["from"]), float(w["to"])) for w in _boss_phases if w["kind"] == "pierce_gate"]
-    _range_windows = sorted((w for w in _boss_phases if w["kind"] == "optimal_range"), key=lambda w: w["from"])
-    _static_core = _base_core_px
-    _static_range = _base_range
 
     # ── 보스 페이즈 관문 (족자 · 속저) ────────────────────────────────────
     # 족자는 그 구간의 평타만 빗나가고, 속저는 코드 상성이 맞는 캐릭터만 통과시킨다.
@@ -4395,8 +4384,6 @@ def simulate(
         (float(w["from"]), float(w["to"]), str(w["code"]))
         for w in enm.get("element_windows") or []
     ]
-    _raid_element_windows = [(float(w["from"]), float(w["to"]), enm.get("code", ""))
-                             for w in _boss_phases if w["kind"] == "element_gate"]
     # 속저 판정은 인게임과 같이 **우월 코드 버프까지 인정한다** (유저 확인) —
     # 로스터 코드 상성이거나, `element_code_override` 버프로 그 코드에 우월해졌거나
     # 둘 중 하나면 통과한다. 후자는 버프라 매 프레임 조회해야 한다
@@ -4409,24 +4396,12 @@ def simulate(
                 or bm.element_override_match(name, code))
 
     def _gate(events: list[HitEvent], t: float) -> list[HitEvent]:
-        if _all_immune or _raid_element_windows or _pierce_windows:
-            # 스킬은 발동 다음 프레임에 수거되기도 한다. 수거 시각을 쓰면 구간
-            # 안에서 난 피해가 밖으로 새거나, 시작 직전 피해가 잘못 사라진다.
-            gated = []
-            for ev in events:
-                phase_t = round(ev.t, 9)  # 60FPS 누적 오차를 경계 판정에서 걷어 낸다.
-                if any(lo <= phase_t < hi for lo, hi in _all_immune):
-                    continue
-                if any(lo <= phase_t < hi for lo, hi in _pierce_windows) and not (
-                    ev.is_pierce or ev.hit_tag.startswith("pierce:") or ev.hit_tag == "pierce_damage"
-                ):
-                    continue
-                if any(lo <= phase_t < hi and not _beats(ev.caster, code)
-                       for lo, hi, code in _raid_element_windows):
-                    continue
-                gated.append(ev)
-            events = gated
-        # 기존 족자·속저는 종전의 수거 프레임 판정을 유지한다.
+        """족자·속저(브라우저 상세 설정)의 게이트. **수거 프레임 판정**을 유지한다.
+
+        회차 보스 구간(종전 `boss_phases`의 무적·관통관문·속성관문)은 이제 보스 패턴이
+        `_land()` 안에서 **히트 시각**으로 판정한다 — 두 축이 규약이 다른 이유는
+        이쪽이 종전부터 수거 프레임이었고 바꿀 근거가 없어서다.
+        """
         if not events or (not _immune_windows and not _element_windows):
             return events
         if any(lo <= t < hi for lo, hi in _immune_windows):
@@ -4446,14 +4421,6 @@ def simulate(
             _boss_events += boss.begin_frame(t, enm)
             state["boss_vanish"] = boss.vanished
 
-        phase_t = round(t, 9)
-        if _core_windows:
-            enm["core_px"] = _static_core if any(lo <= phase_t < hi for lo, hi in _core_windows) else 0
-        if _range_windows:
-            active_range = next((w.get("weapons", []) for w in _range_windows if w["from"] <= phase_t < w["to"]), [])
-            enm["optimal_range_weapons"] = list(dict.fromkeys([*_static_range, *active_range]))
-        if _part_windows:
-            enm["has_parts"] = _static_parts or any(lo <= round(t, 9) < hi for lo, hi in _part_windows)
         bm.tick(t)
         _sync_damage_accumulators(t)
 
@@ -4468,11 +4435,7 @@ def simulate(
         for ev in _gate(_release_damage_accumulators(t), t):
             _land(ev, t)
 
-        while _part_cursor < len(_part_ends) and t + 1e-9 >= _part_ends[_part_cursor]:
-            for char in squad:
-                bm.notify("event:part_destroy", t, char["name"])
-            _part_cursor += 1
-        if not _part_windows and t >= _next_part_break:
+        if not _has_part_windows and t >= _next_part_break:
             for char in squad:
                 bm.notify("event:part_destroy", t, char["name"])
             _next_part_break += _part_break_interval

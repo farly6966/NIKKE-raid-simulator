@@ -57,6 +57,8 @@
 | interrupt | targets | 저지. has_parts는 안 건드린다 |
 | shield | code | 그 코드에 우월한 캐스터의 딜만 들어간다 |
 | vanish | — | 평타 무효(평타 몫의 버스트 게이지 포함). 스킬 딜·스킬 게이지는 그대로 |
+| immune | — | **딜 전부 무효** (fork 고유 — 유저 확인 2026-09-19: 「무적」은 전부 막는다) |
+| pierce_gate | — | **관통 딜만** 들어간다 (fork 고유) |
 | move | weapons | optimal_range_weapons 교체 (좌표가 없어 적정거리 무기군으로 근사) |
 | attack / summon / debuff | spec | **예약. 구간만 차지하고 효과 없음** → SimResult.boss_unmodeled |
 
@@ -73,6 +75,13 @@
   **포맷에만 있고 엔진은 읽지 않는다** — 좌표 모델이 들어오는 날 `share`를 좌표에서 유도하는
   것으로 갈아끼운다(교체 지점은 `BossScript.admit` 한 곳).
   표적에 들어간 딜도 총딜에 그대로 남는다. 체력 풀은 「언제 깨지는가」만 세는 카운터다.
+
+**딜 게이트는 히트 자신의 시각(`ev.t`)으로 판정한다 — 프레임 상태가 아니다.** 스킬은
+발동 다음 프레임에 수거되기도 해서, 수거 프레임으로 재면 구간 안에서 난 피해가 밖으로
+새거나 시작 직전 피해가 잘못 사라진다. 上游는 프레임 상태로 재지만 이 fork는
+`boss_phases` 시절부터 이 규약이었고(`test_union_boss_phases.py`
+§`queued_skill_damage_uses_hit_time_at_phase_boundaries`), 옳은 쪽이라 통일했다.
+그래서 각 게이트 패턴은 **열려 있던 구간 목록**을 들고 다닌다(`_Run.spans`).
 
 적 상태 합성: 기본값에서 출발해 열린 패턴을 시작 시각 순(같으면 선언 순)으로 덮어쓴다.
 `core_px`만 예외로 **살아 있는 것 중 가장 큰 값**(기본값 포함) — 코어가 둘이면 큰 쪽을 겨냥한다.
@@ -117,6 +126,9 @@ _KIND_FIELDS: dict[str, frozenset[str]] = {
     "interrupt": frozenset({"targets"}),
     "shield":    frozenset({"code"}),
     "vanish":    frozenset(),
+    # fork 고유 둘. `boss_phases`의 같은 이름을 그대로 옮긴 것이라 이름도 같다.
+    "immune":     frozenset(),
+    "pierce_gate": frozenset(),
     "move":      frozenset({"weapons"}),
     "attack":    frozenset({"spec"}),
     "summon":    frozenset({"spec"}),
@@ -127,6 +139,8 @@ _REQUIRED: dict[str, tuple[str, ...]] = {
     "interrupt": ("targets",), "shield": ("code",), "move": ("weapons",),
 }
 RESERVED_KINDS = frozenset({"attack", "summon", "debuff"})
+# 딜을 막는 종류 — 「막은 딜」을 로그에 적는다.
+_BLOCKING_KINDS = frozenset({"shield", "vanish", "immune", "pierce_gate"})
 _TARGET_KINDS = frozenset({"parts", "interrupt"})
 _UNTIL_FIELDS = frozenset({"time", "targets_cleared", "after"})
 _BUFF_FIELDS = frozenset({"def_mult", "def_add"})
@@ -174,6 +188,13 @@ class Pattern:
     code: str = ""
     weapons: tuple[str, ...] = ()
     targets: tuple[TargetSpec, ...] = ()
+
+
+def _is_pierce(ev: HitEvent) -> bool:
+    """이 히트가 관통 딜인가. 정본은 `boss_phases` 시절의 같은 식이다 —
+    명중 시각에 기록한 `is_pierce`이거나, 태그가 관통 계열이거나."""
+    return bool(ev.is_pierce or ev.hit_tag.startswith("pierce:")
+                or ev.hit_tag == "pierce_damage")
 
 
 def _is_num(v) -> bool:
@@ -461,6 +482,12 @@ class _Run:
     consumed_until: list[int] = field(default_factory=list)
     targets: list[_Target] = field(default_factory=list)
     blocked: float = 0.0
+    # **열려 있던 구간들** `[(시작, 끝), …]`. 열려 있는 동안 마지막 칸의 끝은 `inf`다.
+    # 딜 게이트가 히트 시각으로 판정하기 때문에 필요하다 — 모듈 docstring §딜 게이트.
+    spans: list[list[float]] = field(default_factory=list)
+
+    def open_at(self, ts: float) -> bool:
+        return any(lo - _EPS <= ts < hi - _EPS for lo, hi in self.spans)
 
 
 class BossScript:
@@ -487,8 +514,20 @@ class BossScript:
         # `_dot_events`를 다음 프레임 시작에 수거하는 것과 같은 규약이다.
         self._carry: list[str] = []
         # 이번 프레임의 게이트·흡수 대상 — `_apply()`가 채운다
-        self._vanish: list[_Run] = []
-        self._shields: list[_Run] = []
+        # **게이트 목록은 전투 내내 고정이다.** 딜 게이트가 히트 시각으로 판정하는데
+        # 「지금 열려 있는 것」만 보면, 구간 안에서 났지만 다음 프레임에 수거된 히트가
+        # 판정 대상에서 통째로 빠진다(닫힌 뒤에는 목록에 없으므로). 구간 판정은
+        # `_Run.open_at()`이 하고 여기서는 **어느 패턴이 게이트인가**만 든다.
+        by_kind: dict[str, list[_Run]] = {k: [] for k in _BLOCKING_KINDS}
+        for r in self._runs:
+            if r.p.kind in by_kind:
+                by_kind[r.p.kind].append(r)
+        self._immune = by_kind["immune"]
+        self._pierce = by_kind["pierce_gate"]
+        self._vanish = by_kind["vanish"]
+        self._shields = by_kind["shield"]
+        # 흡수는 **지금 살아 있는 표적**에 한다 — 매 프레임 `_apply()`가 다시 고른다.
+        # 게이트와 규약이 다른 이유는 「어느 표적을 때리고 있나」가 프레임 상태라서다.
         self._absorbers: list[_Run] = []
 
         # 보스가 사라졌는가. 딜 게이트는 `admit()`이 직접 하고, timeline은 이 값을 state에 실어
@@ -584,6 +623,7 @@ class BossScript:
         run.consumed_until = [len(self._ends[n]) for n, _ in p.until_after]
         run.targets = [_Target(s) for s in p.targets]
         run.blocked = 0.0
+        run.spans.append([t, math.inf])
         if p.kind in RESERVED_KINDS and p.id not in self.unmodeled:
             self.unmodeled.append(p.id)
         detail = f"after {trigger}" + (f" +{p.delay:g}s" if p.delay else "")
@@ -596,12 +636,14 @@ class BossScript:
     def _close(self, run: _Run, t: float, outcome: str, events: list[str]) -> None:
         p = run.p
         run.active = False
+        if run.spans:
+            run.spans[-1][1] = t
         self._ends[p.id].append((t, outcome))
         bits = []
         breakable = [x for x in run.targets if x.spec.breakable]
         if breakable:
             bits.append(f"표적 {sum(x.destroyed for x in breakable)}/{len(breakable)} 파괴")
-        if p.kind in ("shield", "vanish"):
+        if p.kind in _BLOCKING_KINDS:
             bits.append(f"막은 딜 {round(run.blocked):,}")
         self.log.append(BossLogEntry(t=t, pattern=p.id, kind=p.kind, event="end",
                                      outcome=outcome, detail=" · ".join(bits)))
@@ -613,7 +655,7 @@ class BossScript:
         live = sorted((r for r in self._runs if r.active), key=lambda r: (r.start_t, r.p.idx))
         d, core = self._base_def, self._base_core
         parts, weapons = self._base_parts, self._base_weapons
-        vanish, shields, absorbers = [], [], []
+        vanish, absorbers = [], []
         for r in live:
             p = r.p
             if p.kind == "buff":
@@ -622,8 +664,6 @@ class BossScript:
                 core = max(core, p.core_px)
             elif p.kind == "move":
                 weapons = list(p.weapons)
-            elif p.kind == "shield":
-                shields.append(r)
             elif p.kind == "vanish":
                 vanish.append(r)
             elif p.kind in _TARGET_KINDS:
@@ -638,7 +678,9 @@ class BossScript:
         enemy["core_px"] = core
         enemy["has_parts"] = parts
         enemy["optimal_range_weapons"] = weapons
-        self._vanish, self._shields, self._absorbers = vanish, shields, absorbers
+        self._absorbers = absorbers
+        # 이 값만은 **프레임 상태**다 — 무기 사격의 버스트 게이지를 이 프레임에 채울지를
+        # timeline이 여기서 읽는다(`CharState._weapon_gauge_lands()`).
         self.vanished = bool(vanish)
 
     # ── 히트마다 ──
@@ -652,12 +694,24 @@ class BossScript:
         게이트는 결과 이벤트 자리에 있다. 사라짐은 평타만 빼고, 발사로 파생된 스킬과 이미 걸린
         지속 대미지는 보스가 화면에 없어도 들어간다 — 트리거는 이미 처리된 뒤다.
         """
-        if self._vanish and _is_normal(ev):
-            self._vanish[0].blocked += ev.damage
-            return False
+        # **판정 기준은 `ev.t`다** — 모듈 docstring §딜 게이트. 60FPS 누적 오차는
+        # 구간 경계에서만 문제가 되므로 종전 `boss_phases`와 같이 9자리에서 끊는다.
+        ts = round(ev.t, 9)
+        for r in self._immune:            # 전부 막는다 — 가장 먼저 본다
+            if r.open_at(ts):
+                r.blocked += ev.damage
+                return False
+        for r in self._pierce:            # 관통이 아니면 막는다
+            if r.open_at(ts) and not _is_pierce(ev):
+                r.blocked += ev.damage
+                return False
+        for r in self._vanish:
+            if r.open_at(ts) and _is_normal(ev):
+                r.blocked += ev.damage
+                return False
         for r in self._shields:
             # 보호막이 여럿 겹치면 전부 이겨야 한다
-            if not self._superior(ev.caster, r.p.code):
+            if r.open_at(ts) and not self._superior(ev.caster, r.p.code):
                 r.blocked += ev.damage
                 return False
         for r in self._absorbers:
@@ -681,6 +735,115 @@ class BossScript:
         for run in self._runs:
             if run.active:
                 self._close(run, t, "end", [])
+
+
+PHASE_KINDS = ("core", "parts", "immune", "element_gate", "pierce_gate", "optimal_range")
+
+
+def _phase_windows(phases: list, kind: str) -> list[dict]:
+    """그 종류의 창 중 **길이가 있는 것**만. 시작 시각 순(같으면 선언 순)으로 준다.
+
+    `to <= from`인 창은 `lo <= t < hi`가 공집합이라 종전 구현에서도 한 프레임도 열리지
+    않았다 — 여기서 버리는 것이 등가다(`until.time > 0` 검사에 걸리지도 않는다).
+    """
+    out = [w for w in phases if w.get("kind") == kind
+           and float(w["to"]) - float(w["from"]) > 0]
+    return sorted(out, key=lambda w: float(w["from"]))
+
+
+def _span(win: dict, extra: dict | None = None) -> dict:
+    """창 하나 → 「전투 시작에서 `from`만큼 미뤄 열고 길이만큼 뒤에 닫는」 패턴 뼈대."""
+    lo, hi = float(win["from"]), float(win["to"])
+    out = {"after": [START], "delay": lo, "until": {"time": hi - lo}}
+    out.update(extra or {})
+    return out
+
+
+def phases_to_patterns(enemy: dict) -> dict:
+    """fork 고유 `enemy["boss_phases"]`를 **같은 뜻의** 패턴 목록으로 옮긴 적을 돌려준다.
+
+    `boss_phases`는 평평한 시간 창 여섯 종이고, 패턴은 서로를 잇는 스크립트다. 여섯 종이
+    전부 「전투 시작에서 `from`초 뒤에 열려 `to`초에 닫히는」 구간이므로 `after: [start]`
+    + `delay` + `until.time` 하나로 옮겨진다.
+
+    **종전 구현과 한 자리도 달라지면 안 된다** — `calculator/test_boss_phase_numbers.py`가
+    통일 전 숫자를 박아 둔 것이 그 기준이다. 그래서 종류마다 옛 규약을 그대로 옮긴다:
+
+    core           창 안에서는 적의 `core_px`, 밖에서는 0. → 기본값을 0으로 내리고 창마다
+                   `core` 패턴을 연다(합성이 최댓값이라 값이 같은 창이 겹쳐도 같다).
+    parts          창 안이면 `has_parts`. 창이 **끝날 때** 부위 파괴 이벤트가 창마다 한 번.
+                   → 안 깨지는 표적(hp 0) 하나 + `emit_end`. 정적 `has_parts`는 그대로 둔다.
+    optimal_range  창 안에서는 **정적 목록과 합집합**, 겹치면 **먼저 시작한 창이 이긴다**.
+                   패턴의 `move`는 나중에 열린 것이 이기므로 그대로 옮기면 뒤집힌다 ——
+                   경계로 구간을 잘라 **겹치지 않는** `move`들로 펴서 그 차이를 없앤다.
+    immune         딜 전부 차단. 같은 이름의 패턴 종류로 1:1.
+    pierce_gate    관통 딜만 통과. 같은 이름의 패턴 종류로 1:1.
+    element_gate   적 코드에 우월한 캐스터만 통과. → `shield`(code = 적 코드).
+
+    `boss_phases`가 없으면 `patterns` 없이 그대로 돌려준다.
+    """
+    phases = enemy.get("boss_phases") or []
+    if not phases:
+        return dict(enemy)
+    if bad := sorted({str(w.get("kind")) for w in phases} - set(PHASE_KINDS)):
+        raise ValueError(f"모르는 boss_phases kind {bad} — {' · '.join(PHASE_KINDS)}")
+    if enemy.get("patterns"):
+        raise ValueError("patterns와 boss_phases를 함께 줄 수 없다 — 한쪽으로 적는다")
+
+    out = {k: v for k, v in enemy.items() if k not in ("boss_phases", "patterns")}
+    pats: list[dict] = []
+
+    # ── core ──────────────────────────────────────────────────────────────
+    cores = _phase_windows(phases, "core")
+    if cores:
+        base_core = int(enemy.get("core_px", 0) or 0)
+        out["core_px"] = 0          # 창 밖에서는 코어가 없다
+        if base_core > 0:
+            for i, w in enumerate(cores, 1):
+                pats.append(_span(w, {"id": f"코어{i}", "kind": "core", "core_px": base_core}))
+
+    # ── parts ─────────────────────────────────────────────────────────────
+    for i, w in enumerate(_phase_windows(phases, "parts"), 1):
+        pats.append(_span(w, {
+            "id": f"부위{i}", "kind": "parts",
+            "targets": [{"name": f"부위{i}", "hp": 0}],   # hp 0 = 안 깨지는 표적
+            "emit_end": ["event:part_destroy"]}))
+
+    # ── immune · pierce_gate ─────────────────────────────────────────────
+    for kind, label in (("immune", "무적"), ("pierce_gate", "관통관문")):
+        for i, w in enumerate(_phase_windows(phases, kind), 1):
+            pats.append(_span(w, {"id": f"{label}{i}", "kind": kind}))
+
+    # ── element_gate → shield ────────────────────────────────────────────
+    gates = _phase_windows(phases, "element_gate")
+    if gates:
+        code = str(enemy.get("code", ""))
+        if code not in _CODE_ADVANTAGE:
+            raise ValueError(
+                f"element_gate는 적 코드를 기준으로 판정하는데 적 코드가 {code!r}다 — "
+                f"{' · '.join(_CODE_ADVANTAGE)} 중 하나여야 한다")
+        for i, w in enumerate(gates, 1):
+            pats.append(_span(w, {"id": f"속성관문{i}", "kind": "shield", "code": code}))
+
+    # ── optimal_range ────────────────────────────────────────────────────
+    ranges = _phase_windows(phases, "optimal_range")
+    if ranges:
+        static = list(enemy.get("optimal_range_weapons", []))
+        bounds = sorted({float(w[k]) for w in ranges for k in ("from", "to")})
+        seg = 0
+        for lo, hi in zip(bounds, bounds[1:]):
+            # 이 구간을 덮는 창 중 **가장 먼저 시작한 것**이 이긴다 (종전 `next()` 규약).
+            win = next((w for w in ranges
+                        if float(w["from"]) <= lo < float(w["to"])), None)
+            if win is None:
+                continue        # 창 밖 — 기본 목록이 그대로 산다
+            seg += 1
+            weapons = list(dict.fromkeys([*static, *win.get("weapons", [])]))
+            pats.append({"id": f"적정거리{seg}", "kind": "move", "after": [START],
+                         "delay": lo, "until": {"time": hi - lo}, "weapons": weapons})
+
+    out["patterns"] = pats
+    return out
 
 
 def legacy_to_patterns(enemy: dict) -> dict:

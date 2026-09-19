@@ -99,11 +99,24 @@ git merge-base ce75361 Moris-kr/master  → f56124d
 | `b67e366` | Boss Pattern 階段 1 —— 依時間推進的腳本 | **已移植**（本 commit） | 新模組 `calculator/boss_pattern.py`(706 行) + timeline 배선. **`enemy["patterns"]` 為空就不建排程器**，所以 baseline 29/29 結構上就不會動 —— 那是這一筆的合格門檻。等價變換 `legacy_to_patterns()`（**檢算專用，引擎不用**）把舊 scalar 四項寫成「開場開到底的 pattern」，整場戰鬥的總傷與各角色傷害完全相同；`def: 55555` 那一組會抓到 `BurstController.enemy_def` 的快取問題（改成 property 後才過，故意改回快取驗證過測試真的會紅：1,603,915,561 vs 1,610,739,121）。三件直接碰到結果：①傷害閘門只在結果那一處(`_land()`)，所以「擋下的傷害」日誌和總傷差額一分不差 ②**先過閘門再吸收**，被擋的傷害不能打掉阻止兵 ③消失期間連平A份的爆裂量表也不充，技能份照充(`_weapon_gauge_lands()`)。回歸 `calculator/test_boss_pattern.py`(20 條，含上游 34 種拒絕檢查) |
 | `ea82f76` | Boss Pattern 階段 2 —— 王反打妮姬 | 未移植 | 護盾·掩體·嘲諷·隱身·戰鬥不能·復活。**這會改變「計算機在算什麼」** —— 目前整個引擎假設妮姬不會受傷。而且時機與傷害數字只有使用者能校準，所以要掛 beta 旗標、預設關、關著時結果與現在完全相同 |
 
-**與 fork 既有 `boss_phases` 的關係。** 這個 fork 本來就有平的時間窗六種
-（core·parts·immune·element_gate·pierce_gate·optimal_range），Boss Maker·聯盟五王都在用。
-階段 1 **沒有動它** —— 兩軸目前互不知道，同時給的話窗那邊會後寫覆蓋。理由是
-`pierce_gate` 在上游沒有對應，而 fork 的 `immune`（擋全部）和上游 `vanish`（只擋平A）
-語意也不同：硬轉會**悄悄改掉既有設定的意思**。統一要另外立等價證明再做。
+**與 fork 既有 `boss_phases` 的關係 —— 已經收成一套。** 這個 fork 本來就有平的時間窗
+六種（core·parts·immune·element_gate·pierce_gate·optimal_range），Boss Maker·聯盟五王都在用。
+現在由 `phases_to_patterns()` 攤成 pattern 跑同一個排程器，**輸入格式不變**，所以使用者
+存過的盤面與分享碼原封不動。
+
+語意差異是照使用者裁定處理的（2026-09-19：**「無敵」擋全部傷害**）：`immune` 和
+`pierce_gate` 成為 fork 自己的 pattern 種類，不去併進上游的 `vanish`（只擋平A）。
+`optimal_range` 重疊時「先開始的贏」和 `move` 的「後開的贏」相反，所以**照邊界切成不重疊的
+段**再攤開。
+
+**傷害閘門改用命中自己的時刻 (`ev.t`) 判定**，不是幀狀態 —— 技能有可能下一幀才收，用收的
+那一幀去量會讓區間內產生的傷害漏到區間外。上游是用幀狀態，但 fork 從 `boss_phases` 時代
+就是這個規約（回歸在 `test_union_boss_phases.py`），而且這邊才是對的，所以統一成這個。
+連帶地閘門清單必須**整場固定**，只用 `_Run.open_at()` 判區間——只看「現在開著的」的話，
+晚一幀收的命中會整個跳過判定（這個 bug 在改的過程中真的發生過，被那條回歸抓到）。
+
+等價的基準是 `calculator/test_boss_phase_numbers.py`：統一**前**的實作跑出來的 13 種組合，
+總傷·各角色傷害·命中數全部釘住。
 
 ## C 區 —— 從未逐筆判定的八筆（補稽核）
 
