@@ -21,6 +21,7 @@ const characterDir = join(publicDir, 'characters');
 const runtimeFiles = [
   'calculator/__init__.py',
   'calculator/base_stat.py',
+  'calculator/boss_pattern.py',
   'calculator/buff_manager.py',
   'calculator/combat_power.py',
   'calculator/customization.py',

@@ -475,16 +475,16 @@ python calculator/damage.py
 | `event:adjacent_hp_below:N` | ✅ | 자신의 **양 옆 아군** 중 1기가 체력 N% 이하에 도달. `sync_hp()`가 등록된 임계값의 하향 전이를 감지하고, `allies_adjacent:2` 관찰자에게 notify. 플로라 |
 | `event:adjacent_hp_max` | ✅ | 자신의 **양 옆 아군** 중 1기가 **최대 체력 도달**. `sync_hp()`가 hp_pct의 `<100 → 100` **전이(edge)** 를 감지해 `_notify_adjacent_hp_max()`로 발생시킨다(상시 만피는 전이가 없어 무발동). notify의 caster는 이웃이 아니라 **관찰자(효과 소유자)**. 시각은 `self._cur_t`(`tick()`·`notify()`에서 갱신), 재진입은 `_in_hp_edge`로 차단. 최대 체력만 증가 버프(`hp_only_caster_based_pct`·`max_hp_only_pct`)의 만료가 주 발생원. 플로라 |
 | `event:self_down` | ⚠️ | 매칭 로직(`event:xxx`) 있음. notify 호출처 없음 |
-| `event:part_destroy` | ⚠️ | 매칭 로직(`event:xxx`) 있음. 보스 sim에서 파츠는 실제로 파괴되지 않으므로 **기본은 무발동**이고, `config["part_break_interval"]`(초, 0/미지정이면 OFF)을 주면 `timeline.simulate`가 그 주기마다 스쿼드 전원에게 notify한다. 아크레인저 블랙 `배터리 충전`, 사쿠라 : 블룸 인 서머 스킬1 전체 |
+| `event:part_destroy` | ⚠️ | 매칭 로직(`event:xxx`) 있음. 보스 sim에서 파츠는 실제로 파괴되지 않으므로 **기본은 무발동**이고, 발생원이 둘이다 — `config["part_break_interval"]`(초, 0/미지정이면 OFF)을 주면 `timeline.simulate`가 그 주기마다 스쿼드 전원에게 notify하고, 보스 패턴(`enemy["patterns"]`)의 표적이 깨지면 `emit_on_destroy`로 낸다. 아크레인저 블랙 `배터리 충전`, 사쿠라 : 블룸 인 서머 스킬1 전체 |
 | `event:enemy_spawn` | ✅ | `battle_start()` 시점에 모든 스쿼드원에서 notify. 단일 보스 가정 — 전투 시작 시 적 등장 처리 |
-| `event:target_spawn` | ✅ | `battle_start()` 시점에 모든 스쿼드원에서 notify. 단일 보스 가정 — D `기습`의 타겟 출현 효과를 전투 중 1회 발동 |
+| `event:target_spawn` | ✅ | `battle_start()` 시점에 모든 스쿼드원에서 notify. 단일 보스 가정 — D `기습`의 타겟 출현 효과를 전투 중 1회 발동. 보스 패턴의 `emit`으로도 낼 수 있다(`boss_pattern.BOSS_EVENTS`) |
 | `squad_part_break` | ❌ | 아군 누구든 파츠 파괴 시 스쿼드 단위 발동. 현재 전역 파츠 파괴 생산자 미구현 |
 | `fatal_hit` | 🚫 | 전투불능에 이르는 피격. 아군 피격·전투불능 모델 미구현 |
 | `event:heal_received` | ⚠️ | 매칭 로직(`event:xxx`) 있음. `heal_hp_pct` 핸들러에서만 notify 발생 |
 | `event:shield_applied` | ✅ | `shield_from_max_hp_pct` 활성/갱신 시 보호막을 받은 각 대상에게 통지 |
 | `event:shield_consumed` | ⚠️ | 매칭 로직(`event:xxx`) 있음. 아군 피격·보호막 소모 호출처 없음 |
 | `event:cover_hit` | ⚠️ | 매칭 로직(`event:xxx`) 있음. notify 호출처 없음 |
-| `event:projectile_destroy` | ⚠️ | 매칭 로직(`event:xxx`) 있음. notify 호출처 없음 |
+| `event:projectile_destroy` | ⚠️ | 매칭 로직(`event:xxx`) 있음. **저절로 발생하지는 않는다** — 보스 패턴의 `emit`·`emit_on_destroy`에 적으면 그때만 난다(`boss_pattern.BOSS_EVENTS`) |
 | `event:ally_burst_cast` | ✅ | `BurstController._cast_burst()`가 실제 시전 1회마다 스쿼드원 각자의 리스너에 통지. 자신도 아군에 포함. 루피 : 윈터 쇼퍼 `쇼핑` |
 | `event:stat_applied:dot_dmg_pct` | ✅ | `_activate()` 후처리에서 `dot_dmg_pct` stat 버프 신규/갱신 등록 시 각 target_char에게 `notify("event:stat_applied:dot_dmg_pct", t, tgt)` 발생 |
 | `event:stat_applied:split_dmg_pct` | ✅ | 동일. `split_dmg_pct` stat 버프 적용 시 발생 |

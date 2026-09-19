@@ -36,10 +36,13 @@ describe('generated browser runtime', () => {
     ) as RuntimeManifest;
 
     expect(manifest.version).toMatch(/^[a-f0-9]{16}$/);
-    expect(manifest.files).toHaveLength(25);
+    expect(manifest.files).toHaveLength(26);
     expect(manifest.files).toContain('context/growth.py');
     // 브리지가 import하는 모듈이 목록에서 빠지면 엔진 초기화가 통째로 실패한다.
     expect(manifest.files).toContain('calculator/combat_power.py');
+    // `timeline`이 **import 시점에** 부르는 보스 패턴 모듈. 빠지면 엔진이 뜨지 않는다
+    // (2026-09-19 실제로 빠뜨렸고 이 개수 검사가 잡았다).
+    expect(manifest.files).toContain('calculator/boss_pattern.py');
     // `buff_manager`가 **import 시점에** 읽는 손 관리 데이터. 빠지면 엔진이 뜨지 않는다.
     expect(manifest.files).toContain('data/burst_gauge.json');
 

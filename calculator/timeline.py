@@ -20,6 +20,7 @@ import random
 from typing import Any
 
 from .base_stat import calc_base_stats
+from .boss_pattern import BossScript, validate as validate_boss_patterns
 from .buff_manager import (
     BuffManager, _QUANT_PARTS_KEY, _get_skill_lv,
     BURST_GAUGE_EXCEPTIONS,
@@ -564,6 +565,11 @@ DEFAULT_ENEMY: dict = {
     "core_px":              0,    # 코어 직경(px). 0이면 코어 없음, >0이면 코어히트율 확률 계산
     "has_parts":            False,# 파괴 가능 파츠 보유 보스. part_hit_count / part_dmg_pct의 전제
     "optimal_range_weapons": [],  # 적정거리 적용 무기군 목록 e.g. ["SG", "SMG"]
+    # 보스 패턴 — 위 넷을 시간에 따라 덮어쓰고 딜 게이트·표적을 연다. 포맷의 정본은
+    # `calculator/boss_pattern.py`. **비어 있으면 스케줄러를 만들지 않아** 종전과 한 자리도 같다.
+    # fork 고유의 `boss_phases`(평평한 시간 창 여섯 종)와는 **별개 축**이고, 지금은 서로
+    # 겹치지 않는다 — 통합은 등가 증명을 따로 세운 뒤에 한다.
+    "patterns":             [],
     # 보스 페이즈 구간. 둘 다 `[시작초, 끝초)` 반개구간이고 여러 개를 넣을 수 있다.
     #   immune_windows  — 족자: 그 구간 동안 평타가 적중하지 않는다
     #   element_windows — 속저: 그 구간 동안 **그 코드에 우월한** 캐릭터의 딜만 들어간다
@@ -574,6 +580,10 @@ DEFAULT_ENEMY: dict = {
     # 기본은 몸통 하나 — 한 발이 한 히트로 끝나 지금까지와 같다.
     "pierce_pass":          {"shapes": 1, "parts": 0},
 }
+
+# `move` 패턴이 받는 무기군. 정본은 로스터 데이터라 목록을 따로 적지 않는다.
+_WEAPON_TYPES: frozenset[str] = frozenset(
+    v["weapon_type"] for v in _NIKKE.values() if isinstance(v, dict) and v.get("weapon_type"))
 
 
 def _pick(key: str, *sources: dict | None, default=None):
@@ -1306,8 +1316,9 @@ class CharState:
             bm.mark_normal_attack_landed(self.name)
 
         # 버스트 게이지: 히트 수만큼. 오토 무기라 풀차지 배율이 걸릴 자리가 없다.
-        gauge_buffs = bm.get_buffs(self.name, "__enemy__", t)
-        bm.add_burst_gauge(self._burst_gain(gauge_buffs, hit_count), t, self.name, "weapon")
+        if self._weapon_gauge_lands(bm):
+            gauge_buffs = bm.get_buffs(self.name, "__enemy__", t)
+            bm.add_burst_gauge(self._burst_gain(gauge_buffs, hit_count), t, self.name, "weapon")
 
         # 발사(on_attack)와 명중(hit_count)은 별개 축이다. 발사는 탄 1발당 한 번이고,
         # 명중은 총구 수만큼 발생한다. 펠릿은 한 탄을 나눈 것이므로 pellet_hit에서 따로 센다.
@@ -1654,6 +1665,17 @@ class CharState:
 
         return events
 
+    def _weapon_gauge_lands(self, bm: BuffManager) -> bool:
+        """이 무기 사격이 버스트 게이지를 채우는가.
+
+        보스가 사라진 동안(`vanish` 패턴)에는 평타가 빗나가 **평타 몫의 게이지도 안 찬다.**
+        스킬이 채우는 게이지(스킬 대미지 히트·게이지 충전 효과)는 그대로 찬다(상류 유저 확인
+        2026-09-13) — 그래서 충전 창 전체를 닫지 않고 무기 사격의 가산 자리에서만 거른다.
+        무기 변경 모드의 스킬 대미지 사격은 딜 게이트(`sim_result._is_normal`)가 스킬로 보므로
+        여기서도 스킬로 둔다 — 딜은 들어가는데 게이지만 빠지는 어긋남을 만들지 않는다.
+        """
+        return not (bm.state.get("boss_vanish", False) and not self._wc_is_skill_damage())
+
     def _burst_gain(self, buffs: dict, hit_count: int, full_charge: bool = False,
                     burst_energy: float | None = None) -> float:
         """이번 발사가 만드는 버스트 게이지(%). 충전 창 판정은 하지 않는다.
@@ -1817,12 +1839,13 @@ class CharState:
         # 2024-04-25 "SR, RL 니케를 바라보고 있을 경우 차지 시간에 따라 버스트 게이지를
         # 추가로 획득"이 이것이다. 차지 무기도 총구가 2개면 그만큼 히트가 는다
         # (펠릿은 SG뿐이라 여기선 1).
-        gauge_buffs = bm.get_buffs(self.name, "__enemy__", t)
-        bm.add_burst_gauge(
-            self._burst_gain(gauge_buffs, self.pellets * self.muzzles,
-                             full_charge=(is_full and self.name in bm.state.get("camera", cfg["_camera"]))),
-            t, self.name,
-            "weapon:full_charge" if is_full else "weapon")
+        if self._weapon_gauge_lands(bm):
+            gauge_buffs = bm.get_buffs(self.name, "__enemy__", t)
+            bm.add_burst_gauge(
+                self._burst_gain(gauge_buffs, self.pellets * self.muzzles,
+                                 full_charge=(is_full and self.name in bm.state.get("camera", cfg["_camera"]))),
+                t, self.name,
+                "weapon:full_charge" if is_full else "weapon")
         body_ev = "squad_part_hit" if enemy.get("has_parts", False) else "squad_body_hit"
         core_frac = P_core if expected else (1.0 if is_core else 0.0)
         _notify_frac(bm, body_ev, self.name, 1.0 - core_frac,
@@ -2813,7 +2836,7 @@ class BurstController:
             if config.get("immune_blocks_burst") else []
         )
         self.char_states = char_states
-        self.enemy_def: int = enemy.get("def", 31784)
+        self._enemy = enemy
         self.squad_names = [c["name"] for c in squad]
 
         # 캐릭터별 기본(고정) 버스트 단계 — 변하지 않음
@@ -2924,6 +2947,13 @@ class BurstController:
 
         # verbose 로그 (simulate에서 주입)
         self._log: SimLog | None = None
+
+    @property
+    def enemy_def(self):
+        """적 방어력. **조회 시점에 읽는다** — 보스 패턴이 방어력을 바꾸는데 `__init__`에서
+        값을 붙들어 두면 버스트 딜만 옛 방어력으로 계산된다. `enemy`는 `simulate()`가 들고
+        도는 같은 dict 객체라 패턴이 없으면 늘 같은 값이다."""
+        return self._enemy.get("def", 31784)
 
     def tick(self, t: float, bm: BuffManager, state: dict) -> list[HitEvent]:
         events: list[HitEvent] = []
@@ -3864,6 +3894,9 @@ def simulate(
 
     cfg = {**DEFAULT_CONFIG, **(config or {})}
     enm = {**DEFAULT_ENEMY, **(enemy or {})}
+    # 보스 패턴은 무거운 초기화보다 먼저 검사한다 — 잘못 적은 스크립트는 즉시 실패시킨다.
+    boss_patterns = (validate_boss_patterns(enm["patterns"], weapon_types=_WEAPON_TYPES)
+                     if enm.get("patterns") else None)
     duration = cfg["duration"]
 
     if cfg["rng_mode"] not in ("random", "expected"):
@@ -3906,6 +3939,9 @@ def simulate(
         # 지금이 충전 창인가. BurstController.tick()이 매 프레임 갱신한다.
         # 전투 시작 시점은 idle이므로 True에서 출발한다.
         "burst_gauge_charging": True,
+        # 보스가 사라졌는가(`vanish` 패턴). 보스 스케줄러가 프레임 맨 앞에서 갱신한다 —
+        # 무기 사격이 게이지를 채울지를 `CharState._weapon_gauge_lands()`가 이것으로 판정한다.
+        "boss_vanish":  False,
         # 조작자 배타. `ctrl_owner`는 이번 틱에 카메라를 잡은 니케(빈 문자열 = 없음),
         # `ctrl_preempt`는 누가 몇 번 뺏겼나 — 결과를 읽는 사람이 조작이 실제로
         # 성립했는지 볼 수 있어야 한다. 정본: context/CONTROL.md §조작자는 한 명.
@@ -3937,6 +3973,16 @@ def simulate(
 
     bm = BuffManager(squad, state)
     _check_control_refs(char_states, bm)
+
+    # 보스 패턴 스케줄러. 없으면 None이고, 아래 모든 보스 자리가 그대로 건너뛴다.
+    boss: BossScript | None = None
+    if boss_patterns:
+        def _superior(caster: str, code: str) -> bool:
+            # 속성보호막 통과 — 로스터 코드 상성이거나 `element_code_override` 버프로 그 코드에
+            # 우월해졌거나. 인게임이 후자도 인정하고, 버프라 조회 시점에 봐야 한다.
+            return (is_element_match(_NIKKE.get(caster, {}).get("element_code", ""), code)
+                    or bm.element_override_match(caster, code))
+        boss = BossScript(boss_patterns, enm, _superior)
     burst_ctrl = BurstController(squad, cfg, char_states, enm)
     _register_instant_handlers(bm, char_states, burst_ctrl)
 
@@ -4281,6 +4327,19 @@ def simulate(
         bm.sync_hp(ev.caster)
         bm.notify("event:heal_received", t, ev.caster)
 
+    def _land(ev: HitEvent, t: float) -> None:
+        """히트 하나를 결과에 넣는다. 보스 게이트(사라짐·속성보호막)에 막히면 아무 데도 안 남는다
+        — 딜도, 흡혈도, 표적 체력도. 표적 흡수는 게이트를 지난 뒤 `admit()` 안에서 한다.
+
+        fork 고유의 `boss_phases` 게이트(`_gate()`)는 **이 앞에서** 거른다. 두 축은 서로를
+        모르고, 둘 중 하나라도 막으면 안 들어간다.
+        """
+        if boss is not None and not boss.admit(ev, t):
+            return
+        result.hits.append(ev)
+        result.char_total[ev.caster] += ev.damage
+        _apply_lifesteal(ev, bm, base_stats, t)
+
     # 戰鬥開始技能也必須使用 0 秒的 Boss 狀態。
     _base_core_px = enm.get("core_px", 0)
     _base_range = list(enm.get("optimal_range_weapons", []))
@@ -4292,6 +4351,14 @@ def simulate(
     if _initial_range:
         enm["optimal_range_weapons"] = list(dict.fromkeys([*_base_range, *next(
             (w.get("weapons", []) for w in _initial_range if w["from"] <= 0 < w["to"]), [])]))
+    # 보스 상태는 전투 시작 효과보다도 먼저 정한다 — t=0 프레임의 누구도 기본 상태를 읽으면
+    # 안 된다(`core_hit` 조건의 전투 시작 버프 등). 이때 나온 이벤트는 루프 첫 프레임의
+    # 통지 자리에서 나간다. 루프의 t=0 호출은 전이가 이미 끝나 있어 아무것도 안 한다.
+    _boss_events: list[str] = []
+    if boss is not None:
+        _boss_events += boss.begin_frame(0.0, enm)
+        state["boss_vanish"] = boss.vanished
+
     bm.battle_start(0.0)
 
     # battle_start 버프 적용 후 장탄을 실제 max_ammo로 초기화
@@ -4372,6 +4439,13 @@ def simulate(
 
     t = 0.0
     while t <= duration:
+        # 보스 상태 확정 — 맨 앞. 이 프레임의 누구도 읽기 전에 코어·방어력·적정거리·사라짐이
+        # 정해져야 한다. fork의 `boss_phases` 덮어쓰기가 바로 뒤에 오므로, 둘을 함께 쓰면
+        # 창 쪽이 이긴다 — 지금은 서로 겹치지 않게 쓰는 것이 전제다.
+        if boss is not None:
+            _boss_events += boss.begin_frame(t, enm)
+            state["boss_vanish"] = boss.vanished
+
         phase_t = round(t, 9)
         if _core_windows:
             enm["core_px"] = _static_core if any(lo <= phase_t < hi for lo, hi in _core_windows) else 0
@@ -4383,10 +4457,16 @@ def simulate(
         bm.tick(t)
         _sync_damage_accumulators(t)
 
+        # 보스 이벤트 — 파츠 파괴 주기와 **같은 자리**라 두 발생원이 같은 규약이 된다.
+        # `bm.tick` 뒤인 이유도 같다: 만료 정리보다 앞서 버프를 붙이면 같은 프레임에 지워질 수 있다.
+        if _boss_events:
+            for ev_name in _boss_events:
+                for char in squad:
+                    bm.notify(ev_name, t, char["name"])
+            _boss_events.clear()
+
         for ev in _gate(_release_damage_accumulators(t), t):
-            result.hits.append(ev)
-            result.char_total[ev.caster] += ev.damage
-            _apply_lifesteal(ev, bm, base_stats, t)
+            _land(ev, t)
 
         while _part_cursor < len(_part_ends) and t + 1e-9 >= _part_ends[_part_cursor]:
             for char in squad:
@@ -4400,9 +4480,7 @@ def simulate(
         _gated_dots = _gate(_dot_events, t)
         _accumulate_damage(_gated_dots, t)
         for ev in _gated_dots:
-            result.hits.append(ev)
-            result.char_total[ev.caster] += ev.damage
-            _apply_lifesteal(ev, bm, base_stats, t)
+            _land(ev, t)
         _dot_events.clear()
 
         # 조작자(카메라)는 한 명 — **char tick 이전에** 정한다. 캐릭터 tick 안에서
@@ -4413,18 +4491,14 @@ def simulate(
         burst_events = _gate(burst_events, t)
         _accumulate_damage(burst_events, t)
         for ev in burst_events:
-            result.hits.append(ev)
-            result.char_total[ev.caster] += ev.damage
-            _apply_lifesteal(ev, bm, base_stats, t)
+            _land(ev, t)
 
         for char in squad:
             name = char["name"]
             char_events = _gate(char_states[name].tick(t, bm, enm, cfg), t)
             _accumulate_damage(char_events, t)
             for ev in char_events:
-                result.hits.append(ev)
-                result.char_total[name] += ev.damage
-                _apply_lifesteal(ev, bm, base_stats, t)
+                _land(ev, t)
 
         t += DT
 
@@ -4438,10 +4512,14 @@ def simulate(
         _dot_events[:] = _gate(_dot_events, t)
         _accumulate_damage(_dot_events, t)
         for ev in _dot_events:
-            result.hits.append(ev)
-            result.char_total[ev.caster] += ev.damage
-            _apply_lifesteal(ev, bm, base_stats, t)
+            _land(ev, t)
         _dot_events.clear()
+
+    if boss is not None:
+        boss.finish(duration)
+        result.boss_log = boss.log
+        result.boss_score = boss.score
+        result.boss_unmodeled = list(boss.unmodeled)
 
     result.squad_total = sum(result.char_total.values())
     result.hits.sort(key=lambda e: e.t)

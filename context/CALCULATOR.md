@@ -67,17 +67,60 @@ collection.json   ──┘
 
 ```
 for t in 0, DT, 2·DT, ..., duration:
+  boss.begin_frame(t, enemy)          ← 맨 앞. 패턴 전이 → 적 상태(방어력·코어·적정거리·사라짐)
   bm.tick(t)                          ← 주기 대미지 → 만료 버프 제거 → every:Ns 쿨타임
+  보스 이벤트 통지                      ← 패턴이 낸 이벤트를 스쿼드 전원에게
   _dot_events 배출                     ← bm.tick이 낳은 damage 효과의 히트를 여기서 수확
   burst_ctrl.tick(t, bm, state)       ← 버스트 사이클 관리 (버스트 딜도 히트로 나온다)
   for each CharState:
     hits = cs.tick(t, bm, enemy, cfg) ← 발사/차지/재장전 처리
-  (히트마다 result.hits 누적 + char_total 가산 + 흡혈 처리)
+  (히트마다 _land() — 보스 게이트 통과 시 result.hits 누적 + char_total 가산 + 흡혈)
 ```
 
 **한 프레임 안의 이 순서가 곧 명세다.** `bm.tick`이 만료 정리보다 주기 대미지를 먼저
 처리하는 것, DoT 히트를 버스트·발사보다 앞에서 수확하는 것 모두 결과를 바꾼다 —
 스냅샷 L3(순서)가 지키는 대상이 이것이다.
+
+### 보스 패턴 — `enemy["patterns"]`
+
+보스를 「방어력·코어 크기·파츠 여부」 세 스칼라가 아니라 **서로를 잇는 패턴들**로 적는다.
+포맷·검사 규칙의 **정본은 `calculator/boss_pattern.py` 모듈 docstring**이고, 여기에는
+timeline이 어디서 부르는지만 적는다.
+
+```
+시각 = after(앞 패턴의 종료) + delay,  구간은 [시작, 끝)
+종류 = idle · groggy · buff(방어력) · core · parts · interrupt(저지) · shield(속성보호막)
+       · vanish(사라짐) · move(적정거리 근사) · attack/summon/debuff(예약 — 구간만 차지)
+```
+
+| 자리 | 하는 일 |
+|---|---|
+| `validate()` — `simulate()` 진입 직후 | 무거운 초기화보다 **먼저**. 잘못 적은 스크립트는 즉시 실패 |
+| `begin_frame(t, enemy)` — 프레임 맨 앞 | 전이 확정 → 적 상태를 `enemy`에 기록. 이 프레임의 누구도 읽기 전이어야 한다 |
+| `admit(ev, t)` — `_land()` 안 | 딜 게이트(사라짐·보호막) → 통과한 딜만 표적에 흡수 |
+| `finish(duration)` — 루프 뒤 | 열린 채 남은 패턴을 `end`로 닫는다 |
+
+**비어 있으면 스케줄러를 아예 만들지 않는다.** 회귀 baseline 29/29 무변동이 그 근거이고,
+그게 이 기능의 합격 기준이다. 회귀는 `calculator/test_boss_pattern.py`.
+
+세 가지가 결과에 직접 닿는다:
+
+- **딜 게이트가 결과 자리 한 곳(`_land()`)에 있다.** 여러 자리에 흩어지면 어느 한 경로가
+  새도 로그만 보고는 알 수 없다 — 「막은 딜」 로그가 총딜 차이와 한 자리도 안 다른 것이
+  그 증거다.
+- **거른 뒤에 흡수한다.** 안 들어간 딜로 저지원이 깨지면 「보호막을 두르고 저지를 띄운다」가
+  어렵지 않게 된다.
+- **사라짐 중에는 평타 몫의 버스트 게이지도 안 찬다**(`CharState._weapon_gauge_lands()`).
+  스킬이 채우는 게이지는 그대로 찬다 — 충전 창 전체를 닫지 않고 무기 사격의 가산 자리에서만
+  거르는 이유다.
+
+`BurstController.enemy_def`가 property인 것도 여기서 온다 — `__init__`에서 값을 붙들면
+패턴이 방어력을 바꿔도 **버스트 딜만** 옛 방어력으로 계산된다.
+
+> **fork 주의: `enemy["boss_phases"]`와는 별개 축이다.** 이 repo에는 Boss Maker·연합
+> 다섯 왕이 쓰는 평평한 시간 창 여섯 종(core·parts·immune·element_gate·pierce_gate·
+> optimal_range)이 따로 있다. 지금 둘은 서로를 모르고, 같이 쓰면 창 쪽이 나중에 덮어쓴다.
+> 통합은 등가 증명을 따로 세운 뒤에 한다.
 
 ---
 
@@ -342,10 +385,13 @@ damage = ① × ② × ③ × ④ × ⑤ × ⑥ × ⑦
 ```
 HitEvent          — t, caster, damage, is_crit, skill_name, hit_tag
 SimLog            — verbose=True 시 버스트·버프스냅샷·재장전 이벤트 기록
+BossLogEntry      — 보스 패턴 시작·종료·표적 파괴 (**verbose와 무관**)
 SimResult
   ├─ hits: list[HitEvent]
   ├─ char_total: dict[이름 → 딜]     (필드다. squad_total은 이것의 합)
+  ├─ boss_log / boss_score / boss_unmodeled  (패턴이 없으면 비어 있다)
   ├─ summary()                      → 스쿼드 총딜 요약 출력
+  ├─ boss_summary()                 → 보스 패턴이 실제로 어떻게 흘렀는지
   └─ hit_summary()                  → hit_tag별 히트 집계
 
 모듈 함수 (SimResult의 메서드가 아니다)
@@ -361,6 +407,7 @@ SimResult
 ```
 timeline.py
   ├── base_stat.py      (초기화 시 1회)
+  ├── boss_pattern.py   (패턴이 있을 때만 — 검사·프레임 전이·딜 게이트)
   ├── buff_manager.py   (매 프레임 notify / get_buffs / tick)
   ├── damage.py         (매 발사마다 calc_damage)
   └── sim_result.py     (HitEvent 생성 및 SimResult 반환)
@@ -370,6 +417,10 @@ buff_manager.py
 
 base_stat.py
   └── data/base_stat_tables/
+
+boss_pattern.py
+  ├── damage.py         (코드 상성 목록·기본 방어력)
+  └── sim_result.py     (평타 판정·로그 자료구조)
 
 damage.py              (외부 의존 없음 — 순수 계산)
 sim_result.py          (외부 의존 없음 — 자료구조만)
