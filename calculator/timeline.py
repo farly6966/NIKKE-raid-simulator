@@ -131,11 +131,11 @@ _CTRL_FRAME            = 1.0 / 60.0  # 한 프레임(초). 판정 직후를 가�
 #   own_full_burst  본인이 버스트를 쓴 사이클의 풀버스트 동안
 #   after_own_fb    창 자체는 `own_full_burst`와 같고, **시각을 역산하는 전용 슬롯**이다
 #                   (`hold_judge`와만 짝짓는다 — 판정이 풀버스트 **뒤에** 떨어지게 한다)
-_CLICK_WINDOWS = ("always", "burst_charge", "own_full_burst", "after_own_fb")
-_CLICK_MODES   = ("tap", "hold", "hold_judge")
+_CLICK_WINDOWS = ("always", "burst_charge", "burst_chain", "own_full_burst", "after_own_fb")
+_CLICK_MODES   = ("tap", "hold", "hold_until_close", "hold_judge")
 # 스케줄을 두 관심사로 나눠 묻는다 — 한 줄이 누름과 떼기를 함께 정하지 않는다.
-_CLICK_PRESS_MODES = ("tap", "hold")          # 누름: 차지 시작 시점에 래치
-_CLICK_HOLD_MODES  = ("hold", "hold_judge")   # 떼기: 매 틱 평가
+_CLICK_PRESS_MODES = ("tap", "hold", "hold_until_close")   # 누름: 차지 시작 시점에 래치
+_CLICK_HOLD_MODES  = ("hold", "hold_until_close", "hold_judge")   # 떼기: 매 틱 평가
 # 항목이 쓸 수 있는 키 — **닫혀 있다.** 모르는 키가 살아남으면 오타가 조용히
 # "아무 일도 안 함"이 된다. `_timing`은 검증 뒤에 붙는 내부 키다.
 _CLICK_ENTRY_KEYS = ("window", "mode", "rate", "release", "full_charge_interval",
@@ -1090,6 +1090,12 @@ class CharState:
                     f"{' · '.join(_CLICK_WINDOWS)} 중 하나여야 한다. context/CONTROL.md §설정 스키마")
             # `after_own_fb`는 역산 전용 슬롯이라 `hold_judge`와만 짝짓는다. 짝이 어긋나면
             # 창은 열리는데 역산이 없어 **조용히 평범한 홀드**가 된다.
+            # `burst_chain`과 `hold_until_close`도 서로만 짝짓는다. `always`에 잘못 걸면
+            # 창이 안 닫혀 **한 발을 영원히 들고 있는** 입력이 된다 — 조립에서 끊는다.
+            if (window == "burst_chain") != (mode == "hold_until_close"):
+                raise ValueError(
+                    f"{self.name}: `burst_chain`과 `hold_until_close`는 서로만 짝짓는다 "
+                    f"(window={window!r} mode={mode!r}). context/CONTROL.md §클릭 스케줄")
             if (window == "after_own_fb") != (mode == "hold_judge"):
                 raise ValueError(
                     f"{self.name}: `after_own_fb`와 `hold_judge`는 서로만 짝짓는다 "
@@ -1146,6 +1152,15 @@ class CharState:
             # 게이지 가산이 충전 여부를 판정하는 **바로 그 값**이라, 톡톡이 구간과
             # 충전 구간이 구조적으로 어긋날 수 없다. 전투 시작~첫 버스트도 창이다.
             return bool(bm.state.get("burst_gauge_charging", False))
+        if window == "burst_chain":
+            # 게이지가 충족돼 1단계에 **진입한 뒤**부터 풀버스트 시작 **직전**까지.
+            # 버스트 상태머신이 단계 버튼과 쿨을 기다리는 그 구간이다.
+            #
+            # **버충량 숫자가 없다.** `accumulate`에서는 실제 게이지가 100%에 닿아
+            # 1단계로 넘어간 뒤, `fixed`에서는 정해진 충전 완료 시각에 넘어간 뒤 열린다 ——
+            # 90%처럼 미래 충전을 예상해 미리 들지 않으므로 이 컨트롤이 사이클을 늦출 수 없다.
+            _ph = str(bm.state.get("burst_phase") or "")
+            return _ph.startswith(("stage:", "reenter:")) or _ph == "switching"
         # own_full_burst · after_own_fb — 창 자체는 같다(본인이 쓴 사이클의 풀버스트).
         # 역산 여부만 모드가 가른다.
         return bool(bm.state.get("full_burst", False)
@@ -1250,6 +1265,12 @@ class CharState:
                 if (self._charge_phase != _phase_before
                         or self.reloading_until != _reload_before):
                     return events
+                # `hold_until_close`: 떼는 시각이 상수가 아니라 **창이 닫히는 틱**이다.
+                # 풀버스트 진입과 동시에 놓으려는 조작이라 미리 계산할 수 없다 —
+                # 사이클이 언제 넘어갈지는 단계 버튼과 쿨이 정하기 때문이다.
+                _hc = self._click_entry(bm, ("hold_until_close",))
+                if _hc is not None:
+                    return events            # 창이 아직 열려 있다 — 계속 들고 있는다
                 # 홀드: 풀차지가 끝나도 시퀀스가 지정한 시각까지 떼지 않는다.
                 # 대기 중에도 charging=True라 "차지 중" 조건 버프가 유지된다 (실제 게임과 동일).
                 if self._hold_release_t >= 0 and t < self._hold_release_t:
@@ -2549,6 +2570,8 @@ class BurstController:
 
     def tick(self, t: float, bm: BuffManager, state: dict) -> list[HitEvent]:
         events: list[HitEvent] = []
+        # 클릭 스케줄의 `burst_chain` 창이 읽는다 — 단계 버튼을 기다리는 구간인가.
+        state["burst_phase"] = self._phase
 
         # ── 유효 버스트 단계 갱신 ─────────────────────────────────────────
         # burst_stage_override:N 버프 활성 여부를 매 tick 반영
