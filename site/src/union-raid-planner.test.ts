@@ -89,6 +89,58 @@ describe('global staged union raid planner', () => {
     expect(budgets.slice(0, -1).every(b => b === undefined)).toBe(true);
   });
 
+  it('never leaves an attack idle when the endless boss is reachable', () => {
+    // 무한 오왕은 혈량이 없어 한 발 더 쏘면 그만큼 점수가 는다. 그런데 풀이기가 시간
+    // 제한에 걸리면 배정이 덜 된 채로 돌아오고, 그 남은 발이 버려졌다(2026-09-20:
+    // 예산 5초에서 32명 중 두 명이 두 발만 받았다). 뒤에서 주워 담는지 본다.
+    let id = 0;
+    const candidates: RaidPlannerCandidate[] = [];
+    for (let member = 0; member < 5; member++) {
+      for (let team = 0; team < 3; team++) candidates.push(candidate(id++, member, member, team));
+      // 5왕에 **서로 니케가 안 겹치는** 두 덱을 더 준다 — 두 발이 가능한 모양.
+      for (let team = 3; team < 5; team++) candidates.push(candidate(id++, member, 4, team));
+    }
+    const hp = Array.from({ length: 3 }, () => Array(5).fill(50 * RAID_DAMAGE_SCALE));
+
+    // 시간 제한에 걸려 **덜 배정된** 풀이를 흉내 낸다: 마지막 한 판의 선택을 하나 지운다.
+    let calls = 0;
+    const starved = (model: string, options?: { budgetSeconds?: number }): MilpSolution => {
+      const real = highs.solve(model, { output_flag: false, time_limit: options?.budgetSeconds ?? 10 });
+      calls += 1;
+      if (!options?.budgetSeconds) return real;   // 단계 풀이는 그대로
+      const columns = { ...real.Columns };
+      const dropped = Object.keys(columns).find(name => (columns[name]?.Primal ?? 0) > 0.5);
+      if (dropped) columns[dropped] = { ...columns[dropped], Primal: 0 };
+      return { ...real, Columns: columns };
+    };
+
+    const plan = optimizeRaidPlan({ phases: hp, candidates }, starved);
+    expect(calls).toBeGreaterThan(0);
+    expect(plan.reached).toBe('endless');
+    // 한 자리를 지웠어도 사람마다 쏠 수 있는 만큼 다 쏜다.
+    expect(plan.plannedAttacks).toBe(plan.attackCapacity);
+    // 주워 담은 것은 전부 무한 단계로 간다.
+    expect(plan.bars.find(bar => bar.phase === 3)!.shots.length).toBeGreaterThan(0);
+  });
+
+  it('keeps the greedy fill inside the game rules', () => {
+    // 주워 담더라도 «세 발»과 «같은 니케 두 번 금지»는 넘지 않는다.
+    let id = 0;
+    const candidates: RaidPlannerCandidate[] = [];
+    for (let member = 0; member < 5; member++) {
+      for (let team = 0; team < 3; team++) candidates.push(candidate(id++, member, member, team));
+      for (let team = 3; team < 8; team++) candidates.push(candidate(id++, member, 4, team));
+    }
+    const hp = Array.from({ length: 3 }, () => Array(5).fill(50 * RAID_DAMAGE_SCALE));
+    const plan = optimizeRaidPlan({ phases: hp, candidates }, solve);
+
+    for (const member of plan.members) {
+      expect(member.shots.length).toBeLessThanOrEqual(3);
+      const names = member.shots.flatMap(shot => shot.squad);
+      expect(new Set(names).size).toBe(names.length);
+    }
+  });
+
   it('clears phases in order and sends only remaining legal attacks to endless boss 5', () => {
     let id = 0;
     const candidates: RaidPlannerCandidate[] = [];

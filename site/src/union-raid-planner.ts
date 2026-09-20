@@ -240,6 +240,57 @@ function buildModel(
   return { text: lines.join('\n'), variables };
 }
 
+/**
+ * 남은 발을 무한 단계에 채워 넣는다. **`picked`을 제자리에서 늘린다.**
+ *
+ * 무한 오왕은 혈량이 없으므로 **한 발 더 쏘면 그만큼 점수가 는다** — 더 쏴서 손해 보는
+ * 경우가 없다. 그런데 풀이기가 시간 제한에 걸리면 배정이 덜 된 채로 돌아오고, 그렇게
+ * 남은 발은 그냥 버려졌다(2026-09-20 실측: 예산을 5초로 죄면 32명 중 두 명이 두 발만
+ * 받았다). 최적해를 기다리는 대신, 확실히 이득인 자리만 뒤에서 주워 담는다.
+ *
+ * 집는 규칙은 「이미 고른 것과 부딪히지 않는 한도에서 센 것부터」다:
+ *   · 사람마다 남은 한도(게임의 세 발 − 이미 쓴 발) 안에서
+ *   · 같은 (사람·왕·덱)을 두 번 쓰지 않고
+ *   · **그 사람이 이미 쓴 니케와 겹치지 않을 때만** — 겹치면 게임에서 못 내보낸다
+ *
+ * 최적을 보장하지는 않는다. 보장하는 것은 **한 발도 놀리지 않는 것**이다.
+ */
+function fillEndless(
+  input: RaidPlannerInput,
+  candidates: RaidPlannerCandidate[],
+  picked: Array<{ candidate: number; phase: number }>,
+): void {
+  const used = new Set(picked.map(item => item.candidate));
+  const shotsBy = new Map<string, number>();
+  const charactersBy = new Map<string, Set<string>>();
+  for (const item of picked) {
+    const candidate = candidates[item.candidate]!;
+    shotsBy.set(candidate.memberId, (shotsBy.get(candidate.memberId) ?? 0) + 1);
+    const names = charactersBy.get(candidate.memberId) ?? new Set<string>();
+    for (const name of candidate.squad) names.add(name);
+    charactersBy.set(candidate.memberId, names);
+  }
+
+  const spare = candidates
+    .map((candidate, index) => ({ candidate, index }))
+    .filter(row => row.candidate.bossIndex === 4 && !used.has(row.index))
+    .sort((a, b) => b.candidate.damage - a.candidate.damage);
+
+  for (const { candidate, index } of spare) {
+    const capacity = Math.max(0, 3 - (input.alreadyUsed?.[candidate.memberId] ?? 0));
+    if ((shotsBy.get(candidate.memberId) ?? 0) >= capacity) continue;
+    const names = charactersBy.get(candidate.memberId);
+    if (names && candidate.squad.some(name => names.has(name))) continue;
+
+    picked.push({ candidate: index, phase: 3 });
+    used.add(index);
+    shotsBy.set(candidate.memberId, (shotsBy.get(candidate.memberId) ?? 0) + 1);
+    const next = names ?? new Set<string>();
+    for (const name of candidate.squad) next.add(name);
+    charactersBy.set(candidate.memberId, next);
+  }
+}
+
 function usable(solution: MilpSolution): boolean {
   return solution.Status === 'Optimal'
     || (solution.Status === 'Time limit reached' && Object.keys(solution.Columns ?? {}).length > 0);
@@ -297,6 +348,7 @@ export function optimizeRaidPlan(
   const final = tie.Status === 'Optimal' ? tie : primary;
   if (tie.Status !== 'Optimal') provenOptimal = false;
   const picked = selectedFrom(finalSpec, final);
+  if (targetPhase === 3) fillEndless(input, candidates, picked);
 
   const bars: RaidPlannerBar[] = [];
   for (let phase = 0; phase < 3; phase++) {
