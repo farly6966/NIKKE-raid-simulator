@@ -2,8 +2,8 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import loadHighs, { type Highs } from 'highs';
 import type { JobResult } from './union-raid';
 import {
-  RAID_DAMAGE_SCALE, memberAttackCapacity, optimizeRaidPlan, plannerCandidates, type MilpSolution,
-  type RaidPlannerCandidate,
+  RAID_DAMAGE_SCALE, TIE_BUDGET_SECONDS, memberAttackCapacity, optimizeRaidPlan, plannerCandidates,
+  type MilpSolution, type RaidPlannerCandidate,
 } from './union-raid-planner';
 
 let highs: Highs;
@@ -39,6 +39,54 @@ describe('global staged union raid planner', () => {
     expect(memberAttackCapacity([a, b])).toBe(2);
     expect(memberAttackCapacity([a, { ...b, squad: [...a.squad] }])).toBe(1);
     expect(memberAttackCapacity([])).toBe(0);
+  });
+
+  it('keeps advancing phases when the caller loosened the MIP gap', () => {
+    // gap을 준 HiGHS는 «그 오차 안에서 최적»에도 `Status: 'Optimal'`을 준다 — 즉
+    // incumbent가 진짜 최적보다 gap만큼 낮을 수 있다. 그 값을 정확 문턱과 그대로 견주면
+    // **깰 수 있는 단계를 못 깬다고 읽고** 그 뒤를 통째로 포기한다. 2026-09-20 실측:
+    // gap 2%면 1초 만에 `reached: phase1`로 끝났다.
+    //
+    // 작은 판에서는 HiGHS가 gap을 줘도 정확해를 찾아 버려 재현되지 않는다. 그래서
+    // **gap 허용해를 흉내 낸다** — 진짜 풀이의 목표값만 3% 깎는다(5% gap 안쪽).
+    let id = 0;
+    const candidates: RaidPlannerCandidate[] = [];
+    for (let member = 0; member < 5; member++) {
+      for (let team = 0; team < 3; team++) candidates.push(candidate(id++, member, member, team));
+    }
+    const hp = Array.from({ length: 3 }, () => Array(5).fill(50 * RAID_DAMAGE_SCALE));
+    const shaved = (model: string, options?: { budgetSeconds?: number }): MilpSolution => {
+      const real = highs.solve(model, { output_flag: false, time_limit: options?.budgetSeconds ?? 10 });
+      return { ...real, ObjectiveValue: real.ObjectiveValue * 0.97 };
+    };
+
+    // gap을 안 알려 주면(= 예전 동작) 1단계에서 멈춘다.
+    expect(optimizeRaidPlan({ phases: hp, candidates }, shaved).reached).toBe('phase1');
+    // 알려 주면 상계(z / (1 - gap))로 견주므로 계속 나아간다.
+    expect(optimizeRaidPlan({ phases: hp, candidates }, shaved, undefined, 0.05).reached)
+      .not.toBe('phase1');
+  });
+
+  it('spends only the small budget on the optional overkill pass', () => {
+    // 꼬리 깎기는 시간이 다하면 직전 해로 되돌려지는, 있으면 좋고 없어도 그만인 판이다.
+    // 큰 예산을 주면 그만큼 통째로 버려진다(32명 판 42초 중 30초).
+    let id = 0;
+    const candidates: RaidPlannerCandidate[] = [];
+    for (let member = 0; member < 5; member++) {
+      for (let team = 0; team < 3; team++) candidates.push(candidate(id++, member, member, team));
+    }
+    const hp = Array.from({ length: 3 }, () => Array(5).fill(50 * RAID_DAMAGE_SCALE));
+    const budgets: Array<number | undefined> = [];
+    const watched = (model: string, options?: { budgetSeconds?: number }): MilpSolution => {
+      budgets.push(options?.budgetSeconds);
+      return highs.solve(model, { output_flag: false, time_limit: options?.budgetSeconds ?? 10 });
+    };
+
+    optimizeRaidPlan({ phases: hp, candidates }, watched);
+
+    // 마지막 한 판만 작은 예산을 받고, 그 앞의 단계 풀이들은 호출자 기본값을 쓴다.
+    expect(budgets[budgets.length - 1]).toBe(TIE_BUDGET_SECONDS);
+    expect(budgets.slice(0, -1).every(b => b === undefined)).toBe(true);
   });
 
   it('clears phases in order and sends only remaining legal attacks to endless boss 5', () => {

@@ -73,7 +73,25 @@ export interface MilpSolution {
   ObjectiveValue: number;
   Columns: Record<string, MilpColumn>;
 }
-export type MilpSolve = (model: string) => MilpSolution;
+/**
+ * `budgetSeconds`는 **이 한 판에만** 주는 예산이다. 안 주면 호출자의 기본값을 쓴다.
+ * 결과가 있으면 좋고 없어도 그만인 판(꼬리 깎기)에 큰 예산을 태우지 않으려는 것이다.
+ */
+export type MilpSolve = (model: string, options?: { budgetSeconds?: number }) => MilpSolution;
+
+/** 꼬리 깎기 한 판의 예산(초). 근거는 `optimizeRaidPlan` 안의 주석에. */
+export const TIE_BUDGET_SECONDS = 5;
+
+/**
+ * 단계 추진 판정에 쓰는 **상계**.
+ *
+ * `mip_rel_gap`을 준 HiGHS는 «그 오차 안에서 최적»일 때도 `Status: 'Optimal'`을
+ * 돌려준다. 그래서 incumbent `z`는 진짜 최적 `z*`보다 최대 gap만큼 낮을 수 있다
+ * (`z >= (1 - gap) * z*`). 깰 수 있는데 못 깬다고 읽으면 그 뒤 단계를 통째로
+ * 포기하므로, **비교는 항상 상계로 한다.**
+ */
+const objectiveUpperBound = (objective: number, relGap: number): number =>
+  relGap > 0 && relGap < 1 ? objective / (1 - relGap) : objective;
 
 interface ModelSpec {
   text: string;
@@ -240,6 +258,8 @@ export function optimizeRaidPlan(
   input: RaidPlannerInput,
   solve: MilpSolve,
   onProgress?: (message: string) => void,
+  /** 호출자가 HiGHS에 건 `mip_rel_gap`. 단계 추진 판정이 이것을 알아야 한다. */
+  relGap = 0,
 ): RaidPlannerPlan {
   const candidates = validate(input);
   let targetPhase = 0;
@@ -254,7 +274,10 @@ export function optimizeRaidPlan(
     primarySpec = spec; primary = solution; targetPhase = phase;
     if (solution.Status !== 'Optimal') { provenOptimal = false; break; }
     const required = input.phases[phase]!.reduce((total, hp) => total + scaledHp(hp), 0);
-    if (solution.ObjectiveValue < required - 0.5) break;
+    // 상계로 견준다 — incumbent 그대로 견주면 gap을 조금만 풀어도 1단계에서 멈춘다
+    // (2026-09-20 실측: gap 2%면 1초 만에 `reached: phase1`). 그 탓에 `mip_rel_gap`이
+    // 손댈 수 없는 값이 되어 있었다.
+    if (objectiveUpperBound(solution.ObjectiveValue, relGap) < required - 0.5) break;
     if (phase === 2) {
       onProgress?.('三階段可全清，正在最佳化無限五王傷害…');
       primarySpec = buildModel(input, candidates, 3, 'maximize');
@@ -265,8 +288,11 @@ export function optimizeRaidPlan(
   }
 
   onProgress?.('正在減少尾刀溢傷…');
+  // **이 판은 결과가 없어도 그만이다.** 시간이 다하면 아래에서 직전 해로 되돌리므로,
+  // 큰 예산을 주면 그만큼 통째로 버려진다 — 32명 판 실측 42초 중 30초가 그것이었다
+  // (2026-09-20). 그래서 여기에만 작은 예산을 준다: 빨리 풀리면 얻고, 아니면 빨리 접는다.
   const tieSpec = buildModel(input, candidates, targetPhase, 'tie', primary.ObjectiveValue);
-  const tie = solve(tieSpec.text);
+  const tie = solve(tieSpec.text, { budgetSeconds: TIE_BUDGET_SECONDS });
   const finalSpec = tie.Status === 'Optimal' ? tieSpec : primarySpec;
   const final = tie.Status === 'Optimal' ? tie : primary;
   if (tie.Status !== 'Optimal') provenOptimal = false;
