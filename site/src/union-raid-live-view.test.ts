@@ -62,7 +62,7 @@ function host(): HTMLElement {
   const panel = document.createElement('section');
   panel.innerHTML = `
     <div data-live-import><input data-live-file type="file"><div data-live-drop></div><span data-live-import-status></span></div>
-    <div data-live-board><div data-live-status></div><div data-live-phases></div><div data-live-summary></div><div data-live-recorder></div><div data-live-overview></div><div data-live-bosses></div>
+    <div data-live-board><div data-live-status></div><div data-live-phases></div><div data-live-summary></div><div data-live-members></div><div data-live-recorder></div><div data-live-overview></div><div data-live-bosses></div>
       <button data-live-reimport></button><button data-live-reset></button></div>`;
   document.body.append(panel);
   return panel;
@@ -176,6 +176,101 @@ describe('live raid confirmed-state rendering', () => {
     pending.querySelector<HTMLButtonElement>(':scope > button')!.click();
     const fired = JSON.parse(localStorage.getItem('nikke-live-raid-fired-v1')!) as Array<{ deckIndex: number; deckLabel?: string }>;
     expect(fired).toEqual([expect.objectContaining({ deckIndex: 1, deckLabel: '水冷隊' })]);
+  });
+
+  it('makes the recorder follow the plan instead of the first candidate', () => {
+    // 첫 줄(덱 0)이 아니라 **방안이 고른 덱 1**이 미리 잡혀야 한다. 예전에는 첫 줄을
+    // 골라서, 그대로 확정하면 쏘지도 않은 편성이 기록되고 이후 배제가 어긋났다.
+    const second: RaidPlannerCandidate = {
+      ...candidate, id: 1, deckIndex: 1, deckLabel: '水冷隊', damage: 45 * 100_000_000,
+      squad: ['角色F', '角色G', '角色H', '角色I', '角色J'],
+    };
+    localStorage.setItem('nikke-live-raid-base-v1', JSON.stringify({ ...base, candidates: [candidate, second] }));
+    const panel = host();
+    mountLiveRaid({ panel }, { imageOf: () => undefined, labelOf: name => name });
+
+    const planned = plan(false);
+    planned.bars[0]!.shots = [{ ...second, phase: 0, effectiveDamage: second.damage, remainingAfter: 0 }];
+    planned.members[0]!.shots = [{ ...second, phase: 0, effectiveDamage: second.damage, remainingAfter: 0 }];
+    FakeWorker.instances[0]!.emit({ kind: 'done', plan: planned });
+
+    const card = panel.querySelector<HTMLElement>('.live-recorder-card')!;
+    expect(card.querySelector<HTMLInputElement>('.live-damage-input')!.value).toBe('45.00');
+    const picked = card.querySelector<HTMLButtonElement>('.live-team-option[aria-checked="true"]')!;
+    expect(picked.textContent).toContain('水冷隊');
+    expect(picked.classList.contains('is-suggested')).toBe(true);
+    expect(card.querySelector('select[aria-label="實際出刀成員"]')!.textContent).toContain('建議');
+
+    card.querySelector<HTMLButtonElement>('.live-recorder-controls button')!.click();
+    const fired = JSON.parse(localStorage.getItem('nikke-live-raid-fired-v1')!) as Array<{ deckIndex: number }>;
+    expect(fired).toEqual([expect.objectContaining({ deckIndex: 1 })]);
+  });
+
+  it('confirms a shot straight from the top recommendation card', () => {
+    const panel = host();
+    mountLiveRaid({ panel }, { imageOf: () => undefined, labelOf: name => name });
+    FakeWorker.instances[0]!.emit({ kind: 'done', plan: plan(false) });
+
+    const quick = panel.querySelector<HTMLElement>('.live-recommendation .live-quick-confirm')!;
+    expect(quick.querySelector<HTMLInputElement>('.live-damage-input')!.value)
+      .toBe((candidate.damage / 100_000_000).toFixed(2));
+    quick.querySelector<HTMLInputElement>('.live-damage-input')!.value = '58.5';
+    quick.querySelector<HTMLButtonElement>('button')!.click();
+
+    const fired = JSON.parse(localStorage.getItem('nikke-live-raid-fired-v1')!) as Array<{ damage: number }>;
+    expect(fired).toEqual([expect.objectContaining({ damage: 58.5 * 100_000_000 })]);
+  });
+
+  it('rejects a quick confirm with no damage typed instead of recording a zero', () => {
+    const panel = host();
+    mountLiveRaid({ panel }, { imageOf: () => undefined, labelOf: name => name });
+    FakeWorker.instances[0]!.emit({ kind: 'done', plan: plan(false) });
+
+    const quick = panel.querySelector<HTMLElement>('.live-recommendation .live-quick-confirm')!;
+    quick.querySelector<HTMLInputElement>('.live-damage-input')!.value = '';
+    quick.querySelector<HTMLButtonElement>('button')!.click();
+
+    expect(JSON.parse(localStorage.getItem('nikke-live-raid-fired-v1')!)).toEqual([]);
+    expect(panel.querySelector('[data-live-status]')!.textContent).toContain('大於 0');
+  });
+
+  it('shows every member their own three shots across phases, not just this one', () => {
+    // 나머지 화면은 전부 «지금 단계»만 본다. 2·3단계에 잡힌 몫이 안 보이면
+    // 그 사람은 화면에서 「0/3·할 일 없음」으로 보인다 — 실제로는 배정돼 있다.
+    const later: RaidPlannerCandidate = {
+      ...candidate, id: 1, bossIndex: 2, bossName: '三王', deckIndex: 1,
+      squad: ['角色F', '角色G', '角色H', '角色I', '角色J'],
+    };
+    localStorage.setItem('nikke-live-raid-base-v1', JSON.stringify({ ...base, candidates: [candidate, later] }));
+    const panel = host();
+    mountLiveRaid({ panel }, { imageOf: () => undefined, labelOf: name => name });
+
+    const planned = plan(false);
+    planned.members[0]!.shots = [
+      { ...candidate, phase: 0, effectiveDamage: candidate.damage, remainingAfter: 0 },
+      { ...later, phase: 2, effectiveDamage: later.damage, remainingAfter: 0 },
+    ];
+    FakeWorker.instances[0]!.emit({ kind: 'done', plan: planned });
+
+    const card = panel.querySelector<HTMLElement>('.live-member-card')!;
+    const lines = [...card.querySelectorAll('.live-member-shot')];
+    expect(lines).toHaveLength(2);
+    expect(lines[0]!.textContent).toContain('1階');
+    expect(lines[0]!.classList.contains('is-now')).toBe(true);
+    expect(lines[1]!.textContent).toContain('3階');
+    expect(lines[1]!.textContent).toContain('三王');
+    expect(lines[1]!.classList.contains('is-now')).toBe(false);
+  });
+
+  it('marks a confirmed shot as done inside the member card', () => {
+    const panel = host();
+    mountLiveRaid({ panel }, { imageOf: () => undefined, labelOf: name => name });
+    FakeWorker.instances[0]!.emit({ kind: 'done', plan: plan(false) });
+    panel.querySelector<HTMLElement>('.live-recommendation .live-quick-confirm button')!.click();
+
+    const card = panel.querySelector<HTMLElement>('.live-member-card')!;
+    expect(card.textContent).toContain('1 / 3 已出');
+    expect(card.querySelector('.live-member-shot.is-done')!.textContent).toContain('✓');
   });
 
   it('uses a portrait picker in the manual recorder too', () => {

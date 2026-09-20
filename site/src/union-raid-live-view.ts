@@ -40,6 +40,8 @@ const pendingKey = (shot: { phase: number; bossIndex: number; memberId: string; 
   `${shot.phase}:${shot.bossIndex}:${shot.memberId}:${shot.deckIndex}`;
 
 const PHASE_LABELS = ['第 1 階段', '第 2 階段', '第 3 階段', '無限五王'];
+/** 사람별 카드의 줄머리 — 긴 이름을 그대로 쓰면 카드가 이름으로 가득 찬다. */
+const PHASE_SHORT = ['1階', '2階', '3階', '無限'];
 
 /** 玩家看得懂的隊伍稱呼：有自訂名稱就用名稱，沒有才退回「第 N 隊」。 */
 export const deckTitle = (deck: { deckIndex: number; deckLabel?: string }): string =>
@@ -63,6 +65,7 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
   const status = panel.querySelector<HTMLElement>('[data-live-status]')!;
   const phasesBox = panel.querySelector<HTMLElement>('[data-live-phases]')!;
   const summaryBox = panel.querySelector<HTMLElement>('[data-live-summary]')!;
+  const membersBox = panel.querySelector<HTMLElement>('[data-live-members]')!;
   const recorderBox = panel.querySelector<HTMLElement>('[data-live-recorder]')!;
   const overviewBox = panel.querySelector<HTMLElement>('[data-live-overview]')!;
   const bossesBox = panel.querySelector<HTMLElement>('[data-live-bosses]')!;
@@ -133,6 +136,37 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
 
   const currentPhase = (): number => base ? actualPhaseIndex(base.phases, fired) : 0;
 
+  /** 이 왕의 다음 한 발로 방안이 고른 것. 없으면 undefined. */
+  const suggestedFor = (phase: number, bossIndex: number): RaidPlannerShot | undefined =>
+    plan?.bars.find((bar) => bar.phase === phase && bar.bossIndex === bossIndex)?.shots[0];
+
+  /**
+   * 建議 그대로 그 자리에서 확정하는 한 쌍(실제 피해 칸 + 버튼).
+   *
+   * 왕별 목록 맨 아래까지 내려가지 않아도 되게 하려는 것이라 **덱을 고르는 자리는
+   * 두지 않는다** — 다른 덱으로 쐈다면 아래 목록의 「換隊伍」나 기록 표를 쓴다.
+   */
+  function quickConfirm(shot: RaidPlannerShot): HTMLElement {
+    const wrap = el('span', 'live-quick-confirm');
+    const damageInput = el('input', 'live-damage-input');
+    damageInput.type = 'number'; damageInput.min = '0.01'; damageInput.step = '0.01';
+    damageInput.value = (shot.damage / YI).toFixed(2);
+    damageInput.ariaLabel = `${shot.memberName} 打 ${bossName(shot.bossIndex)} 的實際傷害（億）`;
+    const confirm = el('button', 'roster-import', '確認');
+    confirm.type = 'button';
+    confirm.addEventListener('click', () => {
+      const picked = findCandidate(base!.candidates, shot.memberId, shot.bossIndex, shot.deckIndex);
+      const damage = Number(damageInput.value);
+      if (!picked || !Number.isFinite(damage) || damage <= 0) {
+        status.textContent = '請填入大於 0 的實際傷害。';
+        return;
+      }
+      recordShot(picked, shot.phase, damage);
+    });
+    wrap.append(damageInput, confirm);
+    return wrap;
+  }
+
   /** 一隊的樣子：五張頭像＋名稱（有取名才顯示名稱文字，沒取名只看頭像就好）。 */
   function teamBadge(deck: { deckIndex: number; deckLabel?: string; squad: string[] }, extra?: string): HTMLElement {
     const box = el('span', 'live-team');
@@ -150,6 +184,7 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
   function teamPicker(
     options: RaidPlannerCandidate[], selected: number, label: string,
     onPick: (candidate: RaidPlannerCandidate) => void,
+    suggestedDeckIndex?: number,
   ): HTMLElement {
     const group = el('div', 'live-team-picker');
     group.setAttribute('role', 'radiogroup');
@@ -168,8 +203,14 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
       button.type = 'button';
       button.setAttribute('role', 'radio');
       button.dataset.deckIndex = String(option.deckIndex);
-      button.ariaLabel = `${deckTitle(option)}：${option.squad.map(deps.labelOf).join('、')}，預估 ${yi(option.damage)}`;
+      const isSuggested = option.deckIndex === suggestedDeckIndex;
+      button.ariaLabel = `${deckTitle(option)}：${option.squad.map(deps.labelOf).join('、')}，`
+        + `預估 ${yi(option.damage)}${isSuggested ? '，這是建議的隊伍' : ''}`;
       button.append(teamBadge(option, `預估 ${yi(option.damage)}`));
+      if (isSuggested) {
+        button.classList.add('is-suggested');
+        button.append(el('span', 'live-team-suggested', '建議'));
+      }
       button.addEventListener('click', () => { mark(option.deckIndex); onPick(option); });
       button.addEventListener('keydown', (event) => {
         const step = event.key === 'ArrowDown' || event.key === 'ArrowRight' ? 1
@@ -260,9 +301,9 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
     } else {
       const list = el('div', 'live-recommendation-list');
       for (const shot of suggested) {
-        const item = el('span', 'live-recommendation-item');
+        const item = el('div', 'live-recommendation-item');
         item.append(el('b', undefined, `${bossName(shot.bossIndex)} → ${shot.memberName}`),
-          teamBadge(shot, `預估 ${yi(shot.damage)}`));
+          teamBadge(shot, `預估 ${yi(shot.damage)}`), quickConfirm(shot));
         list.append(item);
       }
       recommendation.append(list);
@@ -331,17 +372,25 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
     const candidatesForSelection = (): RaidPlannerCandidate[] => remainingCandidates(base!.candidates, fired)
       .filter((candidate) => candidate.bossIndex === Number(bossSelect.value)
         && candidate.memberId === memberSelect.value);
+    /**
+     * **이 표는 건의를 따라간다.** 예전에는 후보 목록의 첫 줄을 그냥 골랐는데, 그것은
+     * 방안이 고른 덱이 아니다 — 그대로 확정하면 **쏘지도 않은 덱이 기록되고**, 「한 사람이
+     * 같은 니케를 두 번 못 쓴다」는 배제가 그 덱의 명단으로 돌아 이후 건의가 통째로
+     * 어긋난다. 게다가 조용히 어긋난다.
+     */
     const updateDecks = (): void => {
       deckBox.replaceChildren();
       const options = candidatesForSelection();
-      const picked = options[0];
+      const suggested = suggestedFor(now, Number(bossSelect.value));
+      const suggestedDeck = suggested?.memberId === memberSelect.value ? suggested.deckIndex : undefined;
+      const picked = options.find((option) => option.deckIndex === suggestedDeck) ?? options[0];
       pickedDeck = picked?.deckIndex;
       damageInput.value = picked ? (picked.damage / YI).toFixed(2) : '';
       if (!options.length) return;
       deckBox.append(teamPicker(options, picked!.deckIndex, '實際使用隊伍', (candidate) => {
         pickedDeck = candidate.deckIndex;
         damageInput.value = (candidate.damage / YI).toFixed(2);
-      }));
+      }, suggestedDeck));
     };
     const updateMembers = (): void => {
       memberSelect.replaceChildren();
@@ -350,10 +399,16 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
       for (const candidate of remainingCandidates(base!.candidates, fired)) {
         if (candidate.bossIndex === boss) unique.set(candidate.memberId, candidate.memberName);
       }
+      const suggested = suggestedFor(now, boss);
       for (const [id, name] of [...unique.entries()].sort((a, b) => a[1].localeCompare(b[1]))) {
-        const option = document.createElement('option'); option.value = id; option.textContent = name;
+        const option = document.createElement('option');
+        option.value = id;
+        option.textContent = id === suggested?.memberId ? `${name}（建議）` : name;
         memberSelect.append(option);
       }
+      // 이름순은 그대로 두고 **고른 값만** 건의로 맞춘다 — 목록이 매번 재배열되면
+      // 현장에서 사람을 눈으로 찾기 어렵다.
+      if (suggested && unique.has(suggested.memberId)) memberSelect.value = suggested.memberId;
       updateDecks();
     };
     bossSelect.addEventListener('change', updateMembers);
@@ -426,6 +481,82 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
     }
     overviewBox.append(table);
     if (doneCount > 0) overviewBox.append(el('p', 'field-note', `已完成 ${doneCount} 人(全部出完，未列出)。`));
+  }
+
+  /**
+   * 「이 사람은 오늘 무엇을 쏘나」 — 사람 단위로, **단계를 가로질러** 세 발을 다 보여 준다.
+   *
+   * 다른 곳(총람 표·왕별 목록)은 전부 **지금 단계만** 본다. 그래서 1단계에 안 뽑힌 사람은
+   * 화면에서 `0/3`·`·`으로만 보이고, 그 사람 몫이 2·3단계에 잡혀 있다는 것이 안 보인다.
+   * 실제로는 방안이 96발을 전원 3/3으로 배정한다 — 안 보였을 뿐이다.
+   *
+   * 여기서는 머리 수가 많으므로 얼굴은 싣지 않는다(32명 × 3발 = 480장). 이름·단계·왕·예상만
+   * 두고 편성은 `title`로 넘긴다.
+   */
+  function renderMembers(now: number): void {
+    membersBox.replaceChildren();
+    if (!base) return;
+
+    interface Row {
+      memberId: string; memberName: string;
+      done: FiredShot[]; pending: RaidPlannerShot[];
+    }
+    const rows = new Map<string, Row>();
+    const ensure = (memberId: string, memberName: string): Row => {
+      let row = rows.get(memberId);
+      if (!row) { row = { memberId, memberName, done: [], pending: [] }; rows.set(memberId, row); }
+      return row;
+    };
+    for (const candidate of base.candidates) ensure(candidate.memberId, candidate.memberName);
+    for (const shot of fired) ensure(shot.memberId, shot.memberName).done.push(shot);
+    if (plan) {
+      for (const member of plan.members) {
+        ensure(member.memberId, member.memberName).pending.push(...member.shots);
+      }
+    }
+
+    const heading = el('div', 'live-members-heading');
+    heading.append(el('b', undefined, '每個人要出的刀'),
+      el('span', 'field-note', plan
+        ? '跨階段列出，不只目前階段。灰色是已確認的。'
+        : '重算完成後才會有建議；已確認的仍然顯示。'));
+    membersBox.append(heading);
+
+    const firstPhase = (row: Row): number => row.pending[0]?.phase ?? 99;
+    const active = [...rows.values()].filter((row) => row.done.length + row.pending.length > 0);
+    active.sort((a, b) => firstPhase(a) - firstPhase(b) || a.memberName.localeCompare(b.memberName));
+    const idle = rows.size - active.length;
+
+    const grid = el('div', 'live-members-grid');
+    for (const row of active) {
+      const card = el('div', 'live-member-card');
+      const head = el('div', 'live-member-head');
+      head.append(el('b', undefined, row.memberName),
+        el('span', undefined, `${row.done.length} / 3 已出`));
+      card.append(head);
+
+      for (const shot of row.done) {
+        const line = el('div', 'live-member-shot is-done');
+        line.title = shot.squad.map(deps.labelOf).join('／');
+        line.append(el('span', 'live-member-phase', `✓ ${PHASE_SHORT[shot.phase] ?? ''}`),
+          el('span', 'live-member-boss', bossName(shot.bossIndex)),
+          el('span', 'live-member-damage', yi(shot.damage)));
+        card.append(line);
+      }
+      for (const shot of row.pending) {
+        const line = el('div', 'live-member-shot' + (shot.phase === now ? ' is-now' : ''));
+        line.title = `${deckTitle(shot)}：${shot.squad.map(deps.labelOf).join('／')}`;
+        line.append(el('span', 'live-member-phase', PHASE_SHORT[shot.phase] ?? ''),
+          el('span', 'live-member-boss', bossName(shot.bossIndex)),
+          el('span', 'live-member-damage', `預估 ${yi(shot.damage)}`));
+        card.append(line);
+      }
+      grid.append(card);
+    }
+    membersBox.append(grid);
+    if (idle > 0) {
+      membersBox.append(el('p', 'field-note', `另有 ${idle} 人這次沒有被排到刀，也還沒出刀。`));
+    }
   }
 
   function renderConfirmedRow(shot: FiredShot, order: number, remainingAfter: number): HTMLElement {
@@ -549,6 +680,7 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
     renderSummary();
     renderRecorder();
     const now = currentPhase();
+    renderMembers(now);
     renderOverview(now);
     bossesBox.replaceChildren();
     if (now === 3) {

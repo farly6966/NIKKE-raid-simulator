@@ -2238,6 +2238,39 @@ body.bm-open { overflow: hidden; }
 .live-team-swap { flex: 1 0 100%; min-width: 0; }
 .live-team-swap > summary { cursor: pointer; width: max-content; color: var(--cyan); font-size: 11px; }
 .live-team-swap[open] > summary { margin-bottom: 6px; }
+
+/* 건의 그대로 그 자리에서 확정 — 왕별 목록까지 안 내려가도 되게. */
+.live-quick-confirm { display: inline-flex; align-items: center; gap: 6px; }
+.live-quick-confirm .live-damage-input { width: 78px; min-height: 30px; }
+.live-quick-confirm .roster-import { min-height: 30px; padding: 5px 10px; font-size: 10px; }
+.live-recommendation-item { width: 100%; justify-content: flex-start; }
+
+/* 건의된 덱은 고르는 자리에서도 표가 나야 한다. */
+.live-team-option.is-suggested { border-color: rgba(255,191,60,.55); }
+.live-team-suggested { flex: none; margin-left: 6px; padding: 2px 6px; border-radius: 999px;
+  background: rgba(255,191,60,.16); color: var(--amber); font: 700 9.5px inherit; }
+
+/* 사람 단위 — 단계를 가로질러 세 발을 함께 본다. */
+.live-members { margin-bottom: 16px; }
+.live-members-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; margin-bottom: 8px; }
+.live-members-heading > b { color: var(--cyan); font-size: 11px; }
+.live-members-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 8px; }
+.live-member-card { padding: 9px 11px; border: 1px solid var(--line); border-radius: 9px;
+  background: rgba(4,12,21,.55); }
+.live-member-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
+  margin-bottom: 6px; }
+.live-member-head > b { color: var(--ink); font-size: 12px; overflow-wrap: anywhere; }
+.live-member-head > span { flex: none; color: var(--muted); font-size: 10px; }
+.live-member-shot { display: flex; align-items: baseline; gap: 7px; padding: 3px 0;
+  border-top: 1px solid var(--line); font-size: 11px; }
+.live-member-phase { flex: none; width: 34px; color: var(--muted); font: 700 9.5px ui-monospace, monospace; }
+.live-member-boss { flex: 1 1 auto; min-width: 0; color: var(--ink); overflow-wrap: anywhere; }
+.live-member-damage { flex: none; color: var(--muted); font: 700 10px ui-monospace, monospace; }
+.live-member-shot.is-now .live-member-phase { color: var(--amber); }
+.live-member-shot.is-now .live-member-boss { color: var(--amber); }
+.live-member-shot.is-done .live-member-boss,
+.live-member-shot.is-done .live-member-damage { color: var(--muted); }
+.live-member-shot.is-done .live-member-phase { color: var(--cyan); }
 @media (max-width: 600px) {
   .live-metrics { grid-template-columns: repeat(2, minmax(110px, 1fr)); }
   .live-recorder-field { min-width: calc(50% - 4px); }

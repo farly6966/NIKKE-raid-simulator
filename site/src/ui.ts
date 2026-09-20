@@ -703,6 +703,7 @@ export function mountCalculator(root: HTMLElement, deps: CalculatorDependencies)
           </div>
           <div class="live-phases" data-live-phases></div>
           <div class="live-summary" data-live-summary></div>
+          <div class="live-members" data-live-members></div>
           <div class="live-recorder" data-live-recorder></div>
           <div class="live-overview" data-live-overview></div>
           <div class="live-bosses" data-live-bosses></div>
