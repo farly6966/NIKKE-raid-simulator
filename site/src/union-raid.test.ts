@@ -5,7 +5,7 @@ import {
   groupResults, humanSeconds,
   DIRECT_SNIPPET, MEMBER_SNIPPET, parseDirectScan, parseMemberList, readBossCode, readDeckCode,
   readUnionCode, remainingSeconds, unionCodeOf, unionShareOf, encodeUnionDraft, decodeUnionDraft,
-  DECK_SLOTS, cleanDeckLabel, DECK_LABEL_MAX,
+  DECK_SLOTS, cleanDeckLabel, DECK_LABEL_MAX, defaultDeckDecision,
 } from './union-raid';
 import type { BossSlot, JobResult, MemberRow } from './union-raid';
 import { encodeBattleCode, encodeShareCode } from './share-code';
@@ -22,6 +22,37 @@ const battle: BattleSettings = {
 const member = (over: Partial<MemberRow> = {}): MemberRow => ({
   name: '김붕붕', openid: '10620366463748434922', synchro: 843, level: 894, area: 83,
   state: 'public', picked: true, ...over,
+});
+
+describe('기본 편성을 얹을 자리', () => {
+  const slot = (over: Partial<BossSlot> = {}): BossSlot => ({
+    name: '', code: '', decks: Array.from({ length: DECK_SLOTS }, () => ({ code: '' })), ...over,
+  } as BossSlot);
+  const board = (over: Partial<BossSlot> = {}) => Array.from({ length: 5 }, () => slot(over));
+
+  it('저장된 것이 없으면 보스 설정까지 얹는다', () => {
+    expect(defaultDeckDecision(false, board())).toEqual({ seed: true, blankBoard: true });
+  });
+
+  it('편성이 비어 있으면, 보스 이름과 전투 조건이 있어도 얹는다', () => {
+    // 이 탭을 한 번 열면 그 자리에서 초안이 저장되고 회차의 보스 이름·전투 조건이 들어간다.
+    // 예전 조건은 「이름도 조건도 편성도 전부 비었을 때」라, 기본 편성이 생기기 전에 열어
+    // 본 브라우저는 영영 받지 못했다 — 유저가 휴대폰에서 발견한 것이 이것이다.
+    const opened = board({ name: '레이턴스 [Z.E.U.S.]', code: 'NK3-something' });
+    expect(defaultDeckDecision(true, opened)).toEqual({ seed: true, blankBoard: false });
+  });
+
+  it('편성이 하나라도 있으면 손대지 않는다', () => {
+    const used = board({ name: '레이턴스 [Z.E.U.S.]' });
+    used[2]!.decks[0] = { code: 'NK2-something' };
+    expect(defaultDeckDecision(true, used).seed).toBe(false);
+  });
+
+  it('편성만 비었을 때는 보스 설정을 덮어쓰지 않는다', () => {
+    // `blankBoard`가 false면 호출부가 `applyPreset`을 건너뛴다 — 손봐 둔 전투 조건이
+    // 조용히 날아가지 않게 하는 것이 이 값의 유일한 쓸모다.
+    expect(defaultDeckDecision(true, board({ code: 'NK3-tuned' })).blankBoard).toBe(false);
+  });
 });
 
 describe('유니온 명단 읽기', () => {

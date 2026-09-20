@@ -561,6 +561,30 @@ export function readBossCode(slot: BossSlot, synchro = DEFAULT_SYNCHRO_LEVEL): B
 }
 
 /** 덱 칸 하나를 조합 코드에서 읽는다. 첫 덱만 쓴다 — 이 칸이 곧 덱 하나다. */
+/**
+ * 기본 편성을 얹을까, 그리고 보스 설정까지 얹을까.
+ *
+ * **편성이 하나도 없으면 얹는다** — 판이 통째로 비었을 때만이 아니다. 처음에는
+ * 「완전히 빈 판」만 받았는데 그 조건에 걸리는 사람이 거의 없었다: 이 탭을 한 번이라도
+ * 열면 그 자리에서 초안이 저장되고, 초안에는 회차가 자동으로 넣은 보스 이름·전투 조건이
+ * 이미 들어 있다. 그래서 **기본 편성이 생기기 전에 열어 본 브라우저는 영영 기본 편성을
+ * 못 받았다**(2026-09-20, 유저가 휴대폰에서 발견).
+ *
+ * 이름과 전투 조건은 회차가 넣은 것이라 「유저의 뜻」이 아니다. 뜻이 담기는 것은
+ * 편성이므로 **편성이 비었나만 본다.**
+ *
+ * `blankBoard`를 따로 돌려주는 이유: 보스 설정은 빈 판일 때만 얹어야 한다. 편성만
+ * 비었을 때 덮어쓰면 손봐 둔 전투 조건이 조용히 날아간다.
+ */
+export function defaultDeckDecision(
+  restoredDraft: boolean, bosses: BossSlot[],
+): { seed: boolean; blankBoard: boolean } {
+  const blankBoard = !restoredDraft
+    || bosses.every(boss => !boss.name && !boss.code && !boss.decks.some(deck => deck.code));
+  const decksEmpty = bosses.every(boss => !boss.decks.some(deck => deck.code));
+  return { seed: blankBoard || decksEmpty, blankBoard };
+}
+
 export function readDeckCode(slot: DeckSlot, catalogNames: string[]): DeckSlot {
   const code = slot.code.trim();
   if (!code) return { ...slot, squad: undefined, error: undefined };
@@ -3047,15 +3071,17 @@ export function mountUnionRaid(hosts: UnionHosts, deps: UnionDeps): UnionHandle 
     button.addEventListener('click', () => setMode(button.dataset.unionMode === 'personal'));
   }
 
-  if (!restoredDraft || bosses.every(boss => !boss.name && !boss.code && !boss.decks.some(deck => deck.code))) {
-    // **빈 판에만** 기본 편성을 얹는다. 저장된 판이나 불러온 판은 건드리지 않는다 —
-    // 회차 전환이 `decks`를 그대로 두는 것과 같은 규약이다(`applyPreset`).
+  const { seed, blankBoard } = defaultDeckDecision(restoredDraft, bosses);
+  if (seed) {
+    // 불러온 판이나 저장된 판의 편성은 건드리지 않는다 — 위 조건이 이미 걸러 준다.
     // 명단에 없는 니케는 `readDeckCode`가 조용히 빼고 나머지만 채운다.
     const names = deps.catalogNames();
     bosses = bosses.map((boss, index) => {
       const preset = UNION_BOSS_SEASONS[0]!.bosses[index]!;
       const squads = defaultUnionDecks(preset);
-      const withPreset = applyPreset(boss, preset);
+      // 보스 설정은 **빈 판일 때만** 얹는다. 편성만 비었을 때 덮어쓰면 손봐 둔
+      // 전투 조건이 조용히 날아간다.
+      const withPreset = blankBoard ? applyPreset(boss, preset) : boss;
       if (squads.length === 0) return withPreset;
       return {
         ...withPreset,
