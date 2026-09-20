@@ -2312,7 +2312,8 @@ describe('calculator UI', () => {
     root.querySelector<HTMLButtonElement>('[data-report-close]')!.click();
     expect(root.querySelector<HTMLElement>('[data-report-modal]')!.hidden).toBe(true);
     // 판을 통째로 그리고 초상화까지 받는 시험이라 느린 기계에서는 5초를 넘긴다.
-  }, 20_000);
+    // 자기 상한은 떼 둔다 — 전역이 60초라 여기 20초를 적으면 **더 빡빡해진다**.
+  });
 
   it('reuses a cached result instead of recalculating', async () => {
     const firstClient = new FakeClient();
