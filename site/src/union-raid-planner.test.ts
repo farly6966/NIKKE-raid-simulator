@@ -105,10 +105,10 @@ describe('global staged union raid planner', () => {
     // 시간 제한에 걸려 **덜 배정된** 풀이를 흉내 낸다: 마지막 한 판의 선택을 하나 지운다.
     let calls = 0;
     const starved = (model: string, options?: { budgetSeconds?: number }): MilpSolution => {
-      const real = highs.solve(model, { output_flag: false, time_limit: options?.budgetSeconds ?? 10 });
+      const real = highs.solve(model, { output_flag: false, time_limit: options?.budgetSeconds ?? 10 }) as MilpSolution;
       calls += 1;
       if (!options?.budgetSeconds) return real;   // 단계 풀이는 그대로
-      const columns = { ...real.Columns };
+      const columns: MilpSolution['Columns'] = { ...real.Columns };
       const dropped = Object.keys(columns).find(name => (columns[name]?.Primal ?? 0) > 0.5);
       if (dropped) columns[dropped] = { ...columns[dropped], Primal: 0 };
       return { ...real, Columns: columns };
