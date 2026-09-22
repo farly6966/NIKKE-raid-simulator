@@ -1,4 +1,6 @@
 import { squadPreview } from './share-panel';
+import { calibratedCandidates, freshCalibration, readCalibration } from './union-raid-calibration';
+import { mountCalibrationPanel } from './union-raid-calibration-view';
 import {
   memberAttackCapacity, type RaidPlannerCandidate, type RaidPlannerInput, type RaidPlannerPlan,
   type RaidPlannerShot,
@@ -34,6 +36,7 @@ const yi = (value: number): string => `${(value / YI).toLocaleString('zh-TW', {
 
 const BASE_KEY = 'nikke-live-raid-base-v1';
 const FIRED_KEY = 'nikke-live-raid-fired-v1';
+const CALIBRATION_KEY = 'nikke-live-raid-calibration-v1';
 
 /** 대기 중인 한 발을 가리키는 열쇠 — 지난 방안과 견줘 자리가 바뀌었는지 볼 때 쓴다. */
 const pendingKey = (shot: { phase: number; bossIndex: number; memberId: string; deckIndex: number }): string =>
@@ -77,11 +80,31 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
   let plan: RaidPlannerPlan | undefined;
   let worker: Worker | undefined;
   let lastPendingKeys = new Set<string>();
+  let calibration = freshCalibration();
+  const calibrationBox = el('section', 'live-calibration');
+  summaryBox.before(calibrationBox);
+  const calibrationPanel = mountCalibrationPanel(calibrationBox, {
+    change: (next, preview) => {
+      calibration = next;
+      persist();
+      if (preview) {
+        worker?.terminate(); worker = undefined;
+        const previous = lastPendingKeys;
+        plan = preview;
+        lastPendingKeys = new Set(plan.bars.flatMap(bar => bar.shots.map(pendingKey)));
+        status.textContent = '';
+        renderAll(previous);
+      } else resolve();
+    },
+    samplesChanged: (replan) => { persist(); if (replan) resolve(); else renderAll(lastPendingKeys); },
+  });
+  const effectiveCandidates = (): RaidPlannerCandidate[] => calibratedCandidates(base?.candidates ?? [], calibration);
 
   const persist = (): void => {
     try {
       if (base) localStorage.setItem(BASE_KEY, JSON.stringify(base));
       localStorage.setItem(FIRED_KEY, JSON.stringify(fired));
+      localStorage.setItem(CALIBRATION_KEY, JSON.stringify(calibration));
     } catch { /* Storage can be unavailable. */ }
   };
 
@@ -92,6 +115,9 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
       if (savedBase) base = JSON.parse(savedBase) as RaidPlannerInput;
       if (savedFired) fired = JSON.parse(savedFired) as FiredShot[];
     } catch { /* Corrupt storage must not block opening the tab. */ }
+    try {
+      calibration = readCalibration(JSON.parse(localStorage.getItem(CALIBRATION_KEY) ?? 'null'));
+    } catch { calibration = freshCalibration(); }
   };
 
   function resolve(): void {
@@ -99,7 +125,7 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
     worker?.terminate();
     const input: RaidPlannerInput = {
       phases: remainingPhases(base.phases, fired),
-      candidates: remainingCandidates(base.candidates, fired),
+      candidates: remainingCandidates(effectiveCandidates(), fired),
       alreadyUsed: usedCounts(fired),
     };
     plan = undefined;
@@ -153,6 +179,7 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
     damageInput.value = (shot.damage / YI).toFixed(2);
     damageInput.ariaLabel = `${shot.memberName} 打 ${bossName(shot.bossIndex)} 的實際傷害（億）`;
     const confirm = el('button', 'roster-import', '確認');
+    const verification = sampleVerification();
     confirm.type = 'button';
     confirm.addEventListener('click', () => {
       const picked = findCandidate(base!.candidates, shot.memberId, shot.bossIndex, shot.deckIndex);
@@ -161,9 +188,10 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
         status.textContent = '請填入大於 0 的實際傷害。';
         return;
       }
-      recordShot(picked, shot.phase, damage);
+      recordShot(picked, shot.phase, damage, verification.checked());
     });
     wrap.append(damageInput, confirm);
+    if (calibration.enabled) wrap.append(verification.label);
     return wrap;
   }
 
@@ -311,7 +339,14 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
     summaryBox.append(recommendation);
   }
 
-  function recordShot(candidate: RaidPlannerCandidate, phase: number, damageYi: number): boolean {
+  function sampleVerification() {
+    const label = el('label', 'live-sample-verification');
+    const input = el('input'); input.type = 'checkbox';
+    label.append(input, '已核對結算、正常完整出刀（含極限收尾；納入分析）');
+    return { label, checked: () => calibration.enabled && input.checked };
+  }
+
+  function recordShot(candidate: RaidPlannerCandidate, phase: number, damageYi: number, verified = false): boolean {
     if (!base || !Number.isFinite(damageYi) || damageYi <= 0) {
       status.textContent = '請選擇實際隊伍並填入大於 0 的傷害。';
       return false;
@@ -324,12 +359,19 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
       renderAll(lastPendingKeys);
       return false;
     }
+    const original = findCandidate(base.candidates, candidate.memberId, candidate.bossIndex, candidate.deckIndex)!;
+    const predicted = findCandidate(effectiveCandidates(), candidate.memberId, candidate.bossIndex, candidate.deckIndex)!;
+    const hpBefore = remainingPhases(base.phases, fired)[phase]?.[candidate.bossIndex];
     fired.push({
       memberId: candidate.memberId, memberName: candidate.memberName,
       bossIndex: candidate.bossIndex, bossName: candidate.bossName,
       phase, deckIndex: candidate.deckIndex,
       ...(candidate.deckLabel ? { deckLabel: candidate.deckLabel } : {}),
       squad: candidate.squad, damage: damageYi * YI,
+      simulatedDamage: original.damage, predictedDamage: predicted.damage,
+      calibrationSample: verified ? 'verified' : 'unreviewed',
+      finishingShot: phase < 3 && hpBefore !== undefined && damageYi * YI >= hpBefore,
+      finishingReviewed: verified,
     });
     persist();
     resolve();
@@ -369,7 +411,7 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
     damageInput.type = 'number'; damageInput.min = '0.01'; damageInput.step = '0.01';
     damageInput.placeholder = '例如 523.4'; damageInput.ariaLabel = '實際傷害（億）';
 
-    const candidatesForSelection = (): RaidPlannerCandidate[] => remainingCandidates(base!.candidates, fired)
+    const candidatesForSelection = (): RaidPlannerCandidate[] => remainingCandidates(effectiveCandidates(), fired)
       .filter((candidate) => candidate.bossIndex === Number(bossSelect.value)
         && candidate.memberId === memberSelect.value);
     /**
@@ -416,10 +458,11 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
     updateMembers();
 
     const confirm = el('button', 'roster-import union-run', '確認這一刀並重算');
+    const verification = sampleVerification();
     confirm.type = 'button';
     confirm.addEventListener('click', () => {
       const picked = candidatesForSelection().find((candidate) => candidate.deckIndex === pickedDeck);
-      if (picked) recordShot(picked, now, Number(damageInput.value));
+      if (picked) recordShot(picked, now, Number(damageInput.value), verification.checked());
       else status.textContent = '這位成員在這隻王沒有可用隊伍。';
     });
     controls.append(
@@ -429,6 +472,7 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
     const teamField = el('div', 'live-recorder-field live-recorder-team-field');
     teamField.append(el('span', undefined, '實際隊伍（點頭像選擇）'), deckBox);
     card.append(controls, teamField);
+    if (calibration.enabled) card.append(verification.label);
     recorderBox.append(card);
   }
 
@@ -585,7 +629,7 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
 
     // 이 사람이 이 왕에 아직 안 쏜 후보만 — 이미 확정된 (사람·왕·덱)을 또 고르면
     // 같은 조합이 두 번 나간 걸로 잡혀 혈량·한도 계산이 어긋난다.
-    const options = remainingCandidates(base!.candidates, fired)
+    const options = remainingCandidates(effectiveCandidates(), fired)
       .filter((c) => c.memberId === shot.memberId && c.bossIndex === shot.bossIndex);
     const preview = el('span', 'live-shot-preview');
     const damageInput = el('input', 'live-damage-input');
@@ -615,6 +659,7 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
     }
 
     const confirm = el('button', 'roster-import', '確認並重算');
+    const verification = sampleVerification();
     confirm.type = 'button';
     confirm.addEventListener('click', () => {
       const picked = pickedDeck === undefined ? undefined
@@ -624,10 +669,11 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
         status.textContent = '請選擇實際隊伍並填入大於 0 的傷害。';
         return;
       }
-      recordShot(picked, shot.phase, damage);
+      recordShot(picked, shot.phase, damage, verification.checked());
     });
 
     row.append(preview, damageInput, confirm);
+    if (calibration.enabled) row.append(verification.label);
     if (swap) row.append(swap);
     return row;
   }
@@ -676,6 +722,7 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
   }
 
   function renderAll(previousKeys: Set<string>): void {
+    calibrationPanel.render(base ? { base, fired, state: calibration, plan } : undefined);
     renderPhaseStepper();
     renderSummary();
     renderRecorder();
@@ -698,6 +745,7 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
       }
       base = parsed;
       fired = [];
+      calibration = freshCalibration();
       lastPendingKeys = new Set();
       plan = undefined;
       persist();
@@ -729,6 +777,7 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
   resetButton.addEventListener('click', () => {
     if (!base) return;
     fired = [];
+    calibration = freshCalibration();
     lastPendingKeys = new Set();
     plan = undefined;
     persist();

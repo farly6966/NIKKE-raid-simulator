@@ -2240,7 +2240,20 @@ body.bm-open { overflow: hidden; }
 .live-team-swap[open] > summary { margin-bottom: 6px; }
 
 /* 건의 그대로 그 자리에서 확정 — 왕별 목록까지 안 내려가도 되게. */
-.live-quick-confirm { display: inline-flex; align-items: center; gap: 6px; }
+.live-quick-confirm { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.live-calibration { margin: 14px 0; padding: 14px; border: 1px solid var(--line); border-radius: 9px; }
+.live-calibration p { margin: 8px 0; line-height: 1.6; }
+.live-calibration-toggle, .live-sample-verification { display: flex; align-items: center; gap: 8px; }
+.live-calibration input[type="checkbox"], .live-sample-verification input { width: 18px; height: 18px; flex: 0 0 auto; }
+.live-sample-verification { font-size: 12px; line-height: 1.5; flex-basis: 100%; }
+.live-calibration-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 10px; }
+.live-calibration-boss, .live-calibration-preview { padding: 12px; border: 1px solid var(--line); border-radius: 8px; }
+.live-calibration-preview { margin: 12px 0; border-color: var(--amber); }
+.live-calibration button { margin: 4px 8px 4px 0; }
+.live-calibration-sample { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.live-calibration-sample span { overflow-wrap: anywhere; }
+.live-calibration-sample select { max-width: 100%; padding: 6px; color: var(--ink); background: var(--panel); border: 1px solid var(--line); }
+.live-calibration summary { cursor: pointer; padding: 8px 0; }
 .live-quick-confirm .live-damage-input { width: 78px; min-height: 30px; }
 .live-quick-confirm .roster-import { min-height: 30px; padding: 5px 10px; font-size: 10px; }
 .live-recommendation-item { width: 100%; justify-content: flex-start; }

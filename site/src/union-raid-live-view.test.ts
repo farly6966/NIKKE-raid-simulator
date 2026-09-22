@@ -10,7 +10,8 @@ class FakeWorker extends EventTarget {
     super();
     FakeWorker.instances.push(this);
   }
-  postMessage(): void {}
+  input?: RaidPlannerInput;
+  postMessage(input: RaidPlannerInput): void { this.input = input; }
   terminate(): void {}
   emit(data: unknown): void {
     this.dispatchEvent(new MessageEvent('message', { data }));
@@ -75,6 +76,174 @@ beforeEach(() => {
   vi.stubGlobal('Worker', FakeWorker);
   localStorage.setItem('nikke-live-raid-base-v1', JSON.stringify(base));
   localStorage.setItem('nikke-live-raid-fired-v1', '[]');
+});
+
+describe('optional calibration lifecycle', () => {
+  const calibrationKey = 'nikke-live-raid-calibration-v1';
+  const clickText = (panel: HTMLElement, text: string): void => {
+    const button = [...panel.querySelectorAll('button')].find(b => b.textContent === text);
+    expect(button, text).toBeDefined(); button!.click();
+  };
+  const setup = (enabled = true, factors: Record<string, number> = {}): HTMLElement => {
+    localStorage.setItem(calibrationKey, JSON.stringify({ enabled, factors }));
+    const panel = host(); mountLiveRaid({ panel }, { imageOf: () => undefined, labelOf: name => name });
+    FakeWorker.instances.at(-1)!.emit({ kind: 'done', plan: plan(false) });
+    return panel;
+  };
+  const seedTrend = (): void => {
+    localStorage.setItem('nikke-live-raid-fired-v1', JSON.stringify(Array.from({ length: 5 }, (_, i) => ({
+      ...candidate, memberId: `past-${i}`, squad: [], phase: 0,
+      damage: 0.9 * candidate.damage, simulatedDamage: candidate.damage,
+      predictedDamage: candidate.damage, calibrationSample: 'verified', finishingShot: false,
+    }))));
+  };
+
+  it('defaults off and restores a disabled saved state without applying its factors', () => {
+    const panel = host(); mountLiveRaid({ panel }, { imageOf: () => undefined, labelOf: n => n });
+    expect(panel.querySelector<HTMLInputElement>('[role="switch"]')!.checked).toBe(false);
+    expect(FakeWorker.instances.at(-1)!.input!.candidates[0]!.damage).toBe(candidate.damage);
+    const disabled = setup(false, { 0: 0.9 });
+    expect(disabled.textContent).toContain('目前關閉');
+    expect(FakeWorker.instances.at(-1)!.input!.candidates[0]!.damage).toBe(candidate.damage);
+  });
+
+  it('uses calibrated estimates in manual and pending forms, retaining both snapshots', () => {
+    const panel = setup(true, { 0: 0.5 });
+    expect(FakeWorker.instances.at(-1)!.input!.candidates[0]!.damage).toBe(candidate.damage * 0.5);
+    expect(panel.querySelector<HTMLInputElement>('.live-recorder-card .live-damage-input')!.value).toBe('0.03');
+    expect(panel.querySelector<HTMLInputElement>('.live-shot-row.is-pending .live-damage-input')!.value).toBe('0.03');
+    const card = panel.querySelector<HTMLElement>('.live-recorder-card')!;
+    card.querySelector<HTMLInputElement>('.live-sample-verification input')!.checked = true;
+    card.querySelector<HTMLButtonElement>('.live-recorder-controls button')!.click();
+    const fired = JSON.parse(localStorage.getItem('nikke-live-raid-fired-v1')!);
+    expect(fired[0]).toMatchObject({ simulatedDamage: candidate.damage, predictedDamage: candidate.damage * 0.5,
+      calibrationSample: 'verified', finishingShot: false });
+    expect(JSON.parse(localStorage.getItem('nikke-live-raid-base-v1')!).candidates[0].damage).toBe(candidate.damage);
+  });
+
+  it('never includes an untouched prefilled value but accepts an explicitly verified complete finisher', () => {
+    let panel = setup();
+    panel.querySelector<HTMLButtonElement>('.live-quick-confirm button')!.click();
+    expect(JSON.parse(localStorage.getItem('nikke-live-raid-fired-v1')!)[0].calibrationSample).toBe('unreviewed');
+    localStorage.setItem('nikke-live-raid-fired-v1', '[]');
+    panel = setup();
+    const quick = panel.querySelector<HTMLElement>('.live-quick-confirm')!;
+    quick.querySelector<HTMLInputElement>('.live-damage-input')!.value = '0.3';
+    quick.querySelector<HTMLInputElement>('.live-sample-verification input')!.checked = true;
+    quick.querySelector<HTMLButtonElement>('button')!.click();
+    expect(JSON.parse(localStorage.getItem('nikke-live-raid-fired-v1')!)[0]).toMatchObject({
+      finishingShot: true, finishingReviewed: true, calibrationSample: 'verified',
+    });
+    expect(panel.querySelector<HTMLSelectElement>('.live-calibration-sample select')!.disabled).toBe(false);
+    expect(panel.textContent).toContain('完整收尾刀：納入分析');
+    expect(panel.textContent).toContain('有效樣本 1 刀');
+  });
+
+  it('asks for finisher classification and supports reversible full-output and overflow decisions', () => {
+    seedTrend(); const panel = setup();
+    panel.querySelector<HTMLButtonElement>('.live-quick-confirm button')!.click();
+    expect(panel.textContent).toContain('1 筆收尾待確認');
+    expect(panel.textContent).toContain('有效樣本 5 刀');
+    expect(panel.querySelector<HTMLDetailsElement>('.live-calibration > details')!.open).toBe(true);
+    const selectStatus = (value: string): void => {
+      const select = panel.querySelector<HTMLSelectElement>('[aria-label="第 6 刀樣本狀態"]')!;
+      expect(select.disabled).toBe(false);
+      select.value = value; select.dispatchEvent(new Event('change'));
+    };
+    const workers = FakeWorker.instances.length;
+    selectStatus('verified');
+    expect(panel.textContent).toContain('有效樣本 6 刀');
+    expect(panel.textContent).toContain('完整收尾刀：納入分析');
+    selectStatus('overflow');
+    expect(panel.textContent).toContain('有效樣本 5 刀');
+    expect(panel.textContent).toContain('已確認溢出尾刀：排除');
+    const saved = JSON.parse(localStorage.getItem('nikke-live-raid-fired-v1')!)[5];
+    expect(saved).toMatchObject({ calibrationSample: 'overflow', finishingReviewed: true });
+    const restored = setup();
+    expect(restored.querySelector<HTMLSelectElement>('[aria-label="第 6 刀樣本狀態"]')!.value).toBe('overflow');
+    selectStatus('verified');
+    expect(panel.textContent).toContain('有效樣本 6 刀');
+    expect(FakeWorker.instances).toHaveLength(workers + 1);
+  });
+
+  it('restores a legacy auto-excluded finisher as pending instead of silently including it', () => {
+    seedTrend();
+    const fired = JSON.parse(localStorage.getItem('nikke-live-raid-fired-v1')!);
+    fired[0].finishingShot = true;
+    localStorage.setItem('nikke-live-raid-fired-v1', JSON.stringify(fired));
+    const panel = setup();
+    expect(panel.textContent).toContain('有效樣本 4 刀');
+    expect(panel.textContent).toContain('1 筆收尾待確認');
+    const select = panel.querySelector<HTMLSelectElement>('[aria-label="第 1 刀樣本狀態"]')!;
+    expect(select.value).toBe('unreviewed');
+    select.value = 'verified'; select.dispatchEvent(new Event('change'));
+    expect(panel.textContent).toContain('有效樣本 5 刀');
+  });
+
+  it('previews without mutation, applies only on confirmation and discards factors when disabled', () => {
+    seedTrend(); const panel = setup();
+    clickText(panel, '預覽校正與重排');
+    expect(FakeWorker.instances.at(-1)!.input!.candidates[0]!.damage).toBe(candidate.damage * 0.9);
+    expect(JSON.parse(localStorage.getItem(calibrationKey)!).factors).toEqual({});
+    FakeWorker.instances.at(-1)!.emit({ kind: 'done', plan: plan(false) });
+    expect(panel.textContent).toContain('尚未套用');
+    clickText(panel, '確認套用校正');
+    expect(JSON.parse(localStorage.getItem(calibrationKey)!).factors).toEqual({ 0: 0.9 });
+    panel.querySelector<HTMLInputElement>('[role="switch"]')!.click();
+    expect(JSON.parse(localStorage.getItem(calibrationKey)!)).toEqual({ enabled: false, factors: {} });
+    expect(FakeWorker.instances.at(-1)!.input!.candidates[0]!.damage).toBe(candidate.damage);
+    panel.querySelector<HTMLInputElement>('[role="switch"]')!.click();
+    expect(JSON.parse(localStorage.getItem(calibrationKey)!)).toEqual({ enabled: true, factors: {} });
+  });
+
+  it('cancels stale preview results when a new shot is recorded', () => {
+    seedTrend(); const panel = setup();
+    clickText(panel, '預覽校正與重排'); const oldPreview = FakeWorker.instances.at(-1)!;
+    panel.querySelector<HTMLButtonElement>('.live-quick-confirm button')!.click();
+    oldPreview.emit({ kind: 'done', plan: plan(false) });
+    expect(panel.querySelector('.live-calibration-preview')).toBeNull();
+    expect(JSON.parse(localStorage.getItem(calibrationKey)!).factors).toEqual({});
+  });
+
+  it('keeps current factors and plan when preview fails or is cancelled', () => {
+    seedTrend(); const panel = setup();
+    clickText(panel, '預覽校正與重排');
+    FakeWorker.instances.at(-1)!.emit({ kind: 'error', message: 'test error' });
+    expect(panel.textContent).toContain('校正預覽失敗');
+    expect(panel.querySelector('.live-quick-confirm')).not.toBeNull();
+    clickText(panel, '預覽校正與重排');
+    FakeWorker.instances.at(-1)!.emit({ kind: 'done', plan: plan(false) });
+    clickText(panel, '取消');
+    expect(panel.querySelector('.live-calibration-preview')).toBeNull();
+    expect(JSON.parse(localStorage.getItem(calibrationKey)!).factors).toEqual({});
+  });
+
+  it('invalidates previews after sample review without rerunning the current optimizer', () => {
+    seedTrend(); const panel = setup();
+    clickText(panel, '預覽校正與重排'); const oldPreview = FakeWorker.instances.at(-1)!;
+    const count = FakeWorker.instances.length;
+    const select = panel.querySelector<HTMLSelectElement>('.live-calibration-sample select')!;
+    select.value = 'abnormal'; select.dispatchEvent(new Event('change'));
+    oldPreview.emit({ kind: 'done', plan: plan(false) });
+    expect(panel.querySelector('.live-calibration-preview')).toBeNull();
+    expect(FakeWorker.instances).toHaveLength(count);
+    expect(panel.textContent).toContain('有效樣本 4 刀');
+  });
+
+  it('clears calibration on reset and reimport, but preserves historical shot snapshots on undo calibration', () => {
+    const panel = setup(true, { 0: 0.9 });
+    clickText(panel, '撤銷此王校正');
+    expect(FakeWorker.instances.at(-1)!.input!.candidates[0]!.damage).toBe(candidate.damage);
+    panel.querySelector<HTMLButtonElement>('[data-live-reset]')!.click();
+    expect(JSON.parse(localStorage.getItem(calibrationKey)!)).toEqual({ enabled: false, factors: {} });
+    panel.querySelector<HTMLInputElement>('[role="switch"]')!.click();
+    const event = new Event('drop');
+    Object.defineProperty(event, 'dataTransfer', { value: { files: [{ text: () => Promise.resolve(JSON.stringify(base)) }] } });
+    panel.querySelector('[data-live-drop]')!.dispatchEvent(event);
+    return Promise.resolve().then(() => {
+      expect(JSON.parse(localStorage.getItem(calibrationKey)!)).toEqual({ enabled: false, factors: {} });
+    });
+  });
 });
 
 describe('live raid confirmed-state rendering', () => {
