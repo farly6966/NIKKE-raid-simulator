@@ -40,9 +40,15 @@ export function sampleRatio(shot: FiredShot): number | undefined {
   return shot.damage / shot.simulatedDamage!;
 }
 
+export function calibrationSampleStatus(shot: FiredShot): NonNullable<FiredShot['calibrationSample']> {
+  // 舊版會自動排除收尾刀；升級後不可把未重新確認的舊紀錄直接納入。
+  if (shot.finishingShot && shot.calibrationSample === 'verified' && !shot.finishingReviewed) return 'unreviewed';
+  return shot.calibrationSample ?? 'unreviewed';
+}
+
 export function calibrationTrend(fired: FiredShot[], boss: number) {
-  const samples = fired.filter(shot => shot.bossIndex === boss && shot.calibrationSample === 'verified'
-    && !shot.finishingShot && sampleRatio(shot) !== undefined);
+  const samples = fired.filter(shot => shot.bossIndex === boss && calibrationSampleStatus(shot) === 'verified'
+    && sampleRatio(shot) !== undefined);
   const ratios = samples.map(shot => sampleRatio(shot)!);
   const members = new Set(samples.map(shot => shot.memberId)).size;
   const factor = ratios.length ? median(ratios) : 1;

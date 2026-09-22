@@ -1,4 +1,4 @@
-import { calibratedCandidates, calibrationTrend, sampleRatio, type CalibrationState } from './union-raid-calibration';
+import { calibratedCandidates, calibrationSampleStatus, calibrationTrend, sampleRatio, type CalibrationState } from './union-raid-calibration';
 import { remainingCandidates, remainingPhases, usedCounts, type FiredShot } from './union-raid-live';
 import type { RaidPlannerInput, RaidPlannerPlan } from './union-raid-planner';
 
@@ -138,24 +138,29 @@ export function mountCalibrationPanel(host: HTMLElement, callbacks: {
       }), button('取消', () => { cancel(); draw(); }));
       host.append(box);
     }
-    const details = node('details'); details.open = expanded;
+    const pendingFinishers = fired.filter(s => s.finishingShot && calibrationSampleStatus(s) === 'unreviewed').length;
+    const details = node('details'); details.open = expanded || pendingFinishers > 0;
     details.addEventListener('toggle', () => { expanded = details.open; });
-    details.append(node('summary', `檢查出刀樣本與誤差（${fired.length} 刀）`));
-    details.append(node('p', '只勾選已核對遊戲結算、正常完整出刀且條件可比較的紀錄；未勾選的預填值不納入。收尾刀自動排除。'));
+    details.append(node('summary', `檢查出刀樣本與誤差（${fired.length} 刀${pendingFinishers ? `，${pendingFinishers} 筆收尾待確認` : ''}）`));
+    details.append(node('p', '擊殺王不代表傷害溢出。極限收掉且正常完整出刀可納入；確認因王提早死亡而未打滿時，才標記「溢出尾刀」。未核對的紀錄暫不納入。'));
     fired.forEach((shot, index) => {
       const row = node('div'); row.className = 'live-calibration-sample';
       const ratio = sampleRatio(shot);
       row.append(node('span', `${index + 1}. ${shot.memberName}／${shot.bossName}／${shot.phase === 3 ? '無限' : `${shot.phase + 1}階`}／${shot.deckLabel || `第 ${shot.deckIndex + 1} 隊`}：實際 ${yi(shot.damage)}${ratio === undefined ? '；舊紀錄缺少模擬快照，不納入' : `；原始 ${yi(shot.simulatedDamage!)}（${percent(ratio)}）；當時預估 ${yi(shot.predictedDamage ?? shot.simulatedDamage!)}`}`));
       const select = node('select'); select.ariaLabel = `第 ${index + 1} 刀樣本狀態`;
-      for (const [value, label] of [['unreviewed', '未核對／不納入'], ['verified', '已核對結算、正常完整出刀'], ['abnormal', '失誤／斷線／條件不同']]) {
+      for (const [value, label] of [['unreviewed', '待確認／暫不納入'], ['verified', '正常完整出刀／極限收尾（納入）'], ['overflow', '已確認溢出尾刀（排除）'], ['abnormal', '失誤／斷線／條件不同（排除）']]) {
         const option = node('option', label); option.value = value!; select.append(option);
       }
-      select.value = shot.calibrationSample ?? 'unreviewed'; select.disabled = !!shot.finishingShot || ratio === undefined;
+      select.value = calibrationSampleStatus(shot); select.disabled = ratio === undefined;
       select.addEventListener('change', () => {
-        shot.calibrationSample = select.value as FiredShot['calibrationSample']; callbacks.samplesChanged();
+        shot.calibrationSample = select.value as FiredShot['calibrationSample'];
+        shot.finishingReviewed = select.value !== 'unreviewed'; callbacks.samplesChanged();
       });
       row.append(select);
-      if (shot.finishingShot) row.append(node('span', '收尾刀：已排除'));
+      if (shot.calibrationSample === 'overflow') row.append(node('span', '已確認溢出尾刀：排除'));
+      else if (shot.finishingShot) row.append(node('span', calibrationSampleStatus(shot) === 'unreviewed'
+        ? '疑似收尾刀：請確認是否正常打滿' : calibrationSampleStatus(shot) === 'verified'
+          ? '完整收尾刀：納入分析' : '收尾刀：依異常標記排除'));
       row.append(button('撤銷此筆出刀', () => {
         fired.splice(index, 1); callbacks.samplesChanged(true);
       }));

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { calibratedCandidates, calibrationTrend, freshCalibration, readCalibration } from './union-raid-calibration';
+import { calibratedCandidates, calibrationSampleStatus, calibrationTrend, freshCalibration, readCalibration } from './union-raid-calibration';
 import type { FiredShot } from './union-raid-live';
 import type { RaidPlannerCandidate } from './union-raid-planner';
 
@@ -35,7 +35,7 @@ describe('實戰校正', () => {
     }
   });
 
-  it('分王隔離，排除未核對、收尾、異常及缺少有效基準的紀錄', () => {
+  it('分王隔離，排除未核對、未重新確認的舊收尾、異常及缺少有效基準的紀錄', () => {
     const sample = shots(Array(10).fill(0.9));
     sample[0]!.finishingShot = true;
     sample[1]!.calibrationSample = 'unreviewed';
@@ -45,6 +45,28 @@ describe('實戰校正', () => {
     sample[5]!.damage = NaN;
     sample[6]!.bossIndex = 1;
     expect(calibrationTrend(sample, 0).count).toBe(3);
+  });
+
+  it('確認完整輸出的極限收尾可以納入；只有人工標記溢出的尾刀因溢出排除', () => {
+    const sample = shots(Array(5).fill(0.9));
+    sample[0]!.finishingShot = true;
+    sample[0]!.finishingReviewed = true;
+    expect(calibrationTrend(sample, 0)).toMatchObject({ count: 5, ready: true });
+    sample[0]!.calibrationSample = 'overflow';
+    expect(calibrationTrend(sample, 0)).toMatchObject({ count: 4, ready: false });
+    sample[0]!.finishingShot = false;
+    expect(calibrationTrend(sample, 0).count).toBe(4);
+    sample[0]!.calibrationSample = 'verified';
+    expect(calibrationTrend(sample, 0).count).toBe(5);
+  });
+
+  it('舊版自動排除的收尾保持待確認，重新確認後才納入', () => {
+    const shot = { ...shots([0.9])[0]!, finishingShot: true };
+    expect(calibrationSampleStatus(shot)).toBe('unreviewed');
+    expect(calibrationTrend([shot], 0).count).toBe(0);
+    shot.finishingReviewed = true;
+    expect(calibrationSampleStatus(shot)).toBe('verified');
+    expect(calibrationTrend([shot], 0).count).toBe(1);
   });
 
   it('關閉時不改預估；開啟只影響選定王且不污染原始值', () => {

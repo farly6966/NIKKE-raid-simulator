@@ -25,8 +25,11 @@ export interface FiredShot {
   /** 出刀當下的原始模擬與採用預估；舊紀錄沒有快照時不自動納入分析。 */
   simulatedDamage?: number;
   predictedDamage?: number;
-  calibrationSample?: 'verified' | 'unreviewed' | 'abnormal';
+  calibrationSample?: 'verified' | 'unreviewed' | 'abnormal' | 'overflow';
+  /** 依剩餘 HP 推測的收尾刀，只作提示，不代表傷害被截斷。 */
   finishingShot?: boolean;
+  /** 區分人工核對過的完整收尾與舊版自動排除的紀錄。 */
+  finishingReviewed?: boolean;
 }
 
 /** 이 발이 후보 목록의 어느 candidate와 같은 (사람·왕·덱)인가. */

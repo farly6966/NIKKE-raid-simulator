@@ -121,7 +121,7 @@ describe('optional calibration lifecycle', () => {
     expect(JSON.parse(localStorage.getItem('nikke-live-raid-base-v1')!).candidates[0].damage).toBe(candidate.damage);
   });
 
-  it('never includes an untouched prefilled value and excludes finishing shots even if checked', () => {
+  it('never includes an untouched prefilled value but accepts an explicitly verified complete finisher', () => {
     let panel = setup();
     panel.querySelector<HTMLButtonElement>('.live-quick-confirm button')!.click();
     expect(JSON.parse(localStorage.getItem('nikke-live-raid-fired-v1')!)[0].calibrationSample).toBe('unreviewed');
@@ -131,8 +131,53 @@ describe('optional calibration lifecycle', () => {
     quick.querySelector<HTMLInputElement>('.live-damage-input')!.value = '0.3';
     quick.querySelector<HTMLInputElement>('.live-sample-verification input')!.checked = true;
     quick.querySelector<HTMLButtonElement>('button')!.click();
-    expect(JSON.parse(localStorage.getItem('nikke-live-raid-fired-v1')!)[0].finishingShot).toBe(true);
-    expect(panel.querySelector<HTMLSelectElement>('.live-calibration-sample select')!.disabled).toBe(true);
+    expect(JSON.parse(localStorage.getItem('nikke-live-raid-fired-v1')!)[0]).toMatchObject({
+      finishingShot: true, finishingReviewed: true, calibrationSample: 'verified',
+    });
+    expect(panel.querySelector<HTMLSelectElement>('.live-calibration-sample select')!.disabled).toBe(false);
+    expect(panel.textContent).toContain('完整收尾刀：納入分析');
+    expect(panel.textContent).toContain('有效樣本 1 刀');
+  });
+
+  it('asks for finisher classification and supports reversible full-output and overflow decisions', () => {
+    seedTrend(); const panel = setup();
+    panel.querySelector<HTMLButtonElement>('.live-quick-confirm button')!.click();
+    expect(panel.textContent).toContain('1 筆收尾待確認');
+    expect(panel.textContent).toContain('有效樣本 5 刀');
+    expect(panel.querySelector<HTMLDetailsElement>('.live-calibration > details')!.open).toBe(true);
+    const selectStatus = (value: string): void => {
+      const select = panel.querySelector<HTMLSelectElement>('[aria-label="第 6 刀樣本狀態"]')!;
+      expect(select.disabled).toBe(false);
+      select.value = value; select.dispatchEvent(new Event('change'));
+    };
+    const workers = FakeWorker.instances.length;
+    selectStatus('verified');
+    expect(panel.textContent).toContain('有效樣本 6 刀');
+    expect(panel.textContent).toContain('完整收尾刀：納入分析');
+    selectStatus('overflow');
+    expect(panel.textContent).toContain('有效樣本 5 刀');
+    expect(panel.textContent).toContain('已確認溢出尾刀：排除');
+    const saved = JSON.parse(localStorage.getItem('nikke-live-raid-fired-v1')!)[5];
+    expect(saved).toMatchObject({ calibrationSample: 'overflow', finishingReviewed: true });
+    const restored = setup();
+    expect(restored.querySelector<HTMLSelectElement>('[aria-label="第 6 刀樣本狀態"]')!.value).toBe('overflow');
+    selectStatus('verified');
+    expect(panel.textContent).toContain('有效樣本 6 刀');
+    expect(FakeWorker.instances).toHaveLength(workers + 1);
+  });
+
+  it('restores a legacy auto-excluded finisher as pending instead of silently including it', () => {
+    seedTrend();
+    const fired = JSON.parse(localStorage.getItem('nikke-live-raid-fired-v1')!);
+    fired[0].finishingShot = true;
+    localStorage.setItem('nikke-live-raid-fired-v1', JSON.stringify(fired));
+    const panel = setup();
+    expect(panel.textContent).toContain('有效樣本 4 刀');
+    expect(panel.textContent).toContain('1 筆收尾待確認');
+    const select = panel.querySelector<HTMLSelectElement>('[aria-label="第 1 刀樣本狀態"]')!;
+    expect(select.value).toBe('unreviewed');
+    select.value = 'verified'; select.dispatchEvent(new Event('change'));
+    expect(panel.textContent).toContain('有效樣本 5 刀');
   });
 
   it('previews without mutation, applies only on confirmation and discards factors when disabled', () => {

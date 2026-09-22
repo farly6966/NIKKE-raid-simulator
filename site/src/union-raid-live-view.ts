@@ -342,7 +342,7 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
   function sampleVerification() {
     const label = el('label', 'live-sample-verification');
     const input = el('input'); input.type = 'checkbox';
-    label.append(input, '已核對結算、正常完整出刀（納入分析）');
+    label.append(input, '已核對結算、正常完整出刀（含極限收尾；納入分析）');
     return { label, checked: () => calibration.enabled && input.checked };
   }
 
@@ -371,6 +371,7 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
       simulatedDamage: original.damage, predictedDamage: predicted.damage,
       calibrationSample: verified ? 'verified' : 'unreviewed',
       finishingShot: phase < 3 && hpBefore !== undefined && damageYi * YI >= hpBefore,
+      finishingReviewed: verified,
     });
     persist();
     resolve();
