@@ -22,6 +22,11 @@ export interface FiredShot {
   deckLabel?: string;
   squad: string[];
   damage: number;
+  /** 出刀當下的原始模擬與採用預估；舊紀錄沒有快照時不自動納入分析。 */
+  simulatedDamage?: number;
+  predictedDamage?: number;
+  calibrationSample?: 'verified' | 'unreviewed' | 'abnormal';
+  finishingShot?: boolean;
 }
 
 /** 이 발이 후보 목록의 어느 candidate와 같은 (사람·왕·덱)인가. */
