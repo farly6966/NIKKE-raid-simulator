@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { calibrationGroupKey } from './union-raid-calibration';
+import { LIVE_SESSION_KEY, makeLiveBackup, type LiveStored } from './union-raid-session';
 import { mountLiveRaid } from './union-raid-live-view';
 import { RAID_DAMAGE_SCALE, type RaidPlannerCandidate, type RaidPlannerInput, type RaidPlannerPlan } from './union-raid-planner';
 
@@ -32,6 +33,11 @@ const candidate: RaidPlannerCandidate = {
 };
 
 const group = calibrationGroupKey(candidate)!;
+const saved = (): LiveStored => JSON.parse(localStorage.getItem(LIVE_SESSION_KEY)!);
+const clickText = (panel: HTMLElement, text: string): void => {
+  const button = [...panel.querySelectorAll('button')].find(b => b.textContent === text);
+  expect(button, text).toBeDefined(); button!.click();
+};
 
 const base: RaidPlannerInput = {
   phases: Array.from({ length: 3 }, () => Array(5).fill(300 * RAID_DAMAGE_SCALE)),
@@ -80,6 +86,129 @@ beforeEach(() => {
   localStorage.setItem('nikke-live-raid-base-v1', JSON.stringify(base));
   localStorage.setItem('nikke-live-raid-fired-v1', '[]');
 });
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+
+describe('實戰進度保存與補救', () => {
+  const mount = (): HTMLElement => {
+    const panel = host(); mountLiveRaid({ panel }, { imageOf: () => undefined, labelOf: name => name });
+    FakeWorker.instances.at(-1)?.emit({ kind: 'done', plan: plan(false) });
+    return panel;
+  };
+  const importData = async (panel: HTMLElement, data: unknown): Promise<void> => {
+    const event = new Event('drop');
+    Object.defineProperty(event, 'dataTransfer', { value: { files: [{ text: async () => JSON.stringify(data) }] } });
+    panel.querySelector('[data-live-drop]')!.dispatchEvent(event);
+    await Promise.resolve();
+  };
+  const session = () => makeLiveBackup({ base, calibration: { enabled: true, factors: { [group]: 1.1 }, revisions: { [group]: 'tracked' } },
+    fired: [{ ...candidate, memberId: 'past', phase: 0, damage: candidate.damage * 1.1,
+      simulatedDamage: candidate.damage, predictedDamage: candidate.damage * 1.1,
+      calibrationSample: 'verified', calibrationRevision: 'tracked' }] });
+  const seed = (): void => { localStorage.setItem(LIVE_SESSION_KEY, JSON.stringify({ current: session() })); };
+  const exportData = async (panel: HTMLElement): Promise<unknown> => {
+    let exported: Blob | undefined;
+    const OriginalURL = URL;
+    vi.stubGlobal('URL', class extends OriginalURL {
+      static createObjectURL(blob: Blob): string { exported = blob; return 'blob:test'; }
+      static revokeObjectURL(): void {}
+    });
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    clickText(panel, '匯出實戰進度');
+    expect(exported).toBeDefined();
+    return JSON.parse(await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = reject;
+      reader.readAsText(exported!);
+    }));
+  };
+
+  it('匯出完整盤面可在另一個空白瀏覽器還原並接續成效追蹤', async () => {
+    seed(); const panel = mount(); const expected = saved().current;
+    expect(panel.textContent).toContain('校正成效：後續 1 刀');
+    const exported = await exportData(panel);
+    localStorage.clear(); document.body.replaceChildren(); FakeWorker.instances = [];
+    const other = mount(); await importData(other, exported);
+    expect(saved().current).toMatchObject({ ...expected, savedAt: expect.any(String) });
+    expect(other.textContent).toContain('校正成效：後續 1 刀');
+    expect(FakeWorker.instances.at(-1)!.input!.candidates[0]!.damage).toBe(candidate.damage * 1.1);
+  });
+
+  it('匯入與清空先確認；還原點在重開後仍可取回完整進度', async () => {
+    seed(); let panel = mount(); const original = saved().current;
+    await importData(panel, base);
+    expect(saved().current.fired).toHaveLength(1);
+    clickText(panel, '取消操作'); expect(saved().current.fired).toHaveLength(1);
+    panel.querySelector<HTMLButtonElement>('[data-live-reset]')!.click();
+    expect(saved().current.fired).toHaveLength(1);
+    clickText(panel, '確認清空');
+    expect(saved().current.fired).toHaveLength(0);
+    panel = mount(); clickText(panel, '還原上一份進度（清空前）'); clickText(panel, '確認還原');
+    expect(saved().current.fired).toEqual(original.fired);
+    expect(saved().current.calibration).toEqual(original.calibration);
+    await importData(panel, base); clickText(panel, '確認匯入');
+    expect(saved().current.fired).toHaveLength(0);
+    expect(saved().recovery?.snapshot.fired).toHaveLength(1);
+  });
+
+  it('不合法或未支援版本的備份不覆蓋原始進度', async () => {
+    seed(); const panel = mount(); const original = localStorage.getItem(LIVE_SESSION_KEY);
+    for (const data of [{ ...session(), version: 2 }, { phases: [[1]], candidates: [] }]) {
+      await importData(panel, data);
+      expect(panel.textContent).toContain('現有進度未變更');
+      expect(localStorage.getItem(LIVE_SESSION_KEY)).toBe(original);
+    }
+  });
+
+  it('儲存失敗會持續提醒，仍能匯出記憶體中的最新進度', async () => {
+    seed(); const previous = localStorage.getItem(LIVE_SESSION_KEY);
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('quota'); });
+    const panel = mount(); panel.querySelector<HTMLButtonElement>('.live-quick-confirm button')!.click();
+    expect(panel.textContent).toContain('尚未存入此瀏覽器');
+    expect(localStorage.getItem(LIVE_SESSION_KEY)).toBe(previous);
+    expect(await exportData(panel)).toMatchObject({ fired: [expect.anything(), expect.anything()] });
+  });
+
+  it('差距過大的傷害可取消或核對後記錄；盤面改動會使舊確認失效', () => {
+    const panel = mount();
+    const input = panel.querySelector<HTMLInputElement>('.live-quick-confirm input')!;
+    input.value = '0.6'; panel.querySelector<HTMLButtonElement>('.live-quick-confirm button')!.click();
+    expect(saved().current.fired).toHaveLength(0); expect(panel.textContent).toContain('核對單位為「億」');
+    clickText(panel, '取消操作'); expect(saved().current.fired).toHaveLength(0);
+    panel.querySelector<HTMLButtonElement>('.live-quick-confirm button')!.click();
+    const oldConfirm = [...panel.querySelectorAll('button')].find(b => b.textContent === '確認傷害無誤')!;
+    panel.querySelector<HTMLButtonElement>('.live-recorder-controls button')!.click();
+    oldConfirm.click(); expect(saved().current.fired).toHaveLength(1);
+    expect(saved().current.fired[0]!.damage).toBe(candidate.damage);
+    clickText(panel, '撤銷此刀');
+    FakeWorker.instances.at(-1)!.emit({ kind: 'done', plan: plan(false) });
+    panel.querySelector<HTMLInputElement>('.live-quick-confirm input')!.value = '0.6';
+    panel.querySelector<HTMLButtonElement>('.live-quick-confirm button')!.click(); clickText(panel, '確認傷害無誤');
+    expect(saved().current.fired[0]!.damage).toBe(0.6 * 100_000_000);
+  });
+
+  it('可修改舊階段的傷害，保留原始預測、紀錄順序並重新核對樣本', () => {
+    const backup = session(); backup.base.phases = [Array(5).fill(0), ...base.phases.slice(1)];
+    backup.calibration.enabled = false;
+    localStorage.setItem(LIVE_SESSION_KEY, JSON.stringify({ current: backup }));
+    const panel = mount();
+    panel.querySelector<HTMLButtonElement>('.live-history-row button')!.click();
+    panel.querySelector<HTMLInputElement>('[aria-label="修改實際傷害（億）"]')!.value = '0.05';
+    clickText(panel, '儲存傷害修改');
+    expect(saved().current.fired[0]).toMatchObject({ phase: 0, damage: 5_000_000, calibrationSample: 'unreviewed',
+      predictedDamage: candidate.damage * 1.1, simulatedDamage: candidate.damage, calibrationRevision: 'tracked' });
+    clickText(panel, '還原上一份進度（修改傷害前）'); clickText(panel, '確認還原');
+    expect(saved().current.fired[0]!.damage).toBe(backup.fired[0]!.damage);
+  });
+
+  it('後續五刀校正誤差變大時提醒撤銷，舊的原始樣本不計入', () => {
+    const backup = session();
+    backup.fired = Array.from({ length: 5 }, (_, i) => ({ ...backup.fired[0]!, memberId: `past${i}`, damage: candidate.damage }));
+    backup.fired.push({ ...backup.fired[0]!, memberId: 'training', calibrationRevision: undefined });
+    localStorage.setItem(LIVE_SESSION_KEY, JSON.stringify({ current: backup }));
+    const panel = mount();
+    expect(panel.textContent).toContain('後續 5 刀，平均誤差由 0.00% → 10.00%');
+    expect(panel.textContent).toContain('建議檢查或撤銷此刀型校正');
+  });
+});
 
 describe('optional calibration lifecycle', () => {
   const calibrationKey = 'nikke-live-raid-calibration-v1';
@@ -88,12 +217,16 @@ describe('optional calibration lifecycle', () => {
     expect(button, text).toBeDefined(); button!.click();
   };
   const setup = (enabled = true, factors: Record<string, number> = {}): HTMLElement => {
-    localStorage.setItem(calibrationKey, JSON.stringify({ enabled, factors }));
+    if (localStorage.getItem(LIVE_SESSION_KEY)) {
+      const current = saved(); current.current.calibration = { enabled, factors };
+      localStorage.setItem(LIVE_SESSION_KEY, JSON.stringify(current));
+    } else localStorage.setItem(calibrationKey, JSON.stringify({ enabled, factors }));
     const panel = host(); mountLiveRaid({ panel }, { imageOf: () => undefined, labelOf: name => name });
     FakeWorker.instances.at(-1)!.emit({ kind: 'done', plan: plan(false) });
     return panel;
   };
   const seedTrend = (): void => {
+    localStorage.removeItem(LIVE_SESSION_KEY);
     localStorage.setItem('nikke-live-raid-fired-v1', JSON.stringify(Array.from({ length: 5 }, (_, i) => ({
       ...candidate, memberId: `past-${i}`, squad: [...candidate.squad].reverse(), phase: 0,
       damage: 0.9 * candidate.damage, simulatedDamage: candidate.damage,
@@ -117,11 +250,11 @@ describe('optional calibration lifecycle', () => {
   });
 
   it('discards legacy boss-wide factors with a notice while retaining historical shots', () => {
-    seedTrend(); const saved = localStorage.getItem('nikke-live-raid-fired-v1');
+    seedTrend(); const legacy = localStorage.getItem('nikke-live-raid-fired-v1');
     const panel = setup(true, { 0: 0.9 });
     expect(panel.textContent).toContain('已清除舊版整隻王的校正係數');
     expect(FakeWorker.instances.at(-1)!.input!.candidates[0]!.damage).toBe(candidate.damage);
-    expect(localStorage.getItem('nikke-live-raid-fired-v1')).toBe(saved);
+    expect(localStorage.getItem('nikke-live-raid-fired-v1')).toBe(legacy);
     expect(panel.textContent).toContain('有效樣本 5 刀');
   });
 
@@ -130,7 +263,7 @@ describe('optional calibration lifecycle', () => {
     const otherGroup = calibrationGroupKey(other)!;
     localStorage.setItem('nikke-live-raid-base-v1', JSON.stringify({ ...base, candidates: [candidate, other] }));
     seedTrend();
-    const fired = JSON.parse(localStorage.getItem('nikke-live-raid-fired-v1')!);
+    const fired = JSON.parse(localStorage.getItem(LIVE_SESSION_KEY) ?? 'null') ? saved().current.fired : JSON.parse(localStorage.getItem('nikke-live-raid-fired-v1')!);
     fired[3].squad = other.squad; fired[4].squad = other.squad;
     localStorage.setItem('nikke-live-raid-fired-v1', JSON.stringify(fired));
     const split = setup();
@@ -146,9 +279,9 @@ describe('optional calibration lifecycle', () => {
     FakeWorker.instances.at(-1)!.emit({ kind: 'done', plan: plan(false) });
     expect(panel.querySelector('.live-calibration-preview')!.textContent).toContain('角色E');
     clickText(panel, '確認套用校正');
-    expect(JSON.parse(localStorage.getItem(calibrationKey)!).factors).toEqual({ [group]: 0.9, [otherGroup]: 0.8 });
+    expect(saved().current.calibration.factors).toEqual({ [group]: 0.9, [otherGroup]: 0.8 });
     clickText(panel, '撤銷此刀型校正');
-    expect(JSON.parse(localStorage.getItem(calibrationKey)!).factors).toEqual({ [otherGroup]: 0.8 });
+    expect(saved().current.calibration.factors).toEqual({ [otherGroup]: 0.8 });
     expect(FakeWorker.instances.at(-1)!.input!.candidates.map(c => c.damage))
       .toEqual([candidate.damage, other.damage * 0.8]);
   });
@@ -170,23 +303,25 @@ describe('optional calibration lifecycle', () => {
     const card = panel.querySelector<HTMLElement>('.live-recorder-card')!;
     card.querySelector<HTMLInputElement>('.live-sample-verification input')!.checked = true;
     card.querySelector<HTMLButtonElement>('.live-recorder-controls button')!.click();
-    const fired = JSON.parse(localStorage.getItem('nikke-live-raid-fired-v1')!);
+    const fired = JSON.parse(localStorage.getItem(LIVE_SESSION_KEY) ?? 'null') ? saved().current.fired : JSON.parse(localStorage.getItem('nikke-live-raid-fired-v1')!);
     expect(fired[0]).toMatchObject({ simulatedDamage: candidate.damage, predictedDamage: candidate.damage * 0.5,
       calibrationSample: 'verified', finishingShot: false });
-    expect(JSON.parse(localStorage.getItem('nikke-live-raid-base-v1')!).candidates[0].damage).toBe(candidate.damage);
+    expect(saved().current.base.candidates[0]!.damage).toBe(candidate.damage);
   });
 
   it('never includes an untouched prefilled value but accepts an explicitly verified complete finisher', () => {
     let panel = setup();
     panel.querySelector<HTMLButtonElement>('.live-quick-confirm button')!.click();
-    expect(JSON.parse(localStorage.getItem('nikke-live-raid-fired-v1')!)[0].calibrationSample).toBe('unreviewed');
+    expect(saved().current.fired[0]!.calibrationSample).toBe('unreviewed');
+    localStorage.removeItem(LIVE_SESSION_KEY);
     localStorage.setItem('nikke-live-raid-fired-v1', '[]');
     panel = setup();
     const quick = panel.querySelector<HTMLElement>('.live-quick-confirm')!;
     quick.querySelector<HTMLInputElement>('.live-damage-input')!.value = '0.3';
     quick.querySelector<HTMLInputElement>('.live-sample-verification input')!.checked = true;
     quick.querySelector<HTMLButtonElement>('button')!.click();
-    expect(JSON.parse(localStorage.getItem('nikke-live-raid-fired-v1')!)[0]).toMatchObject({
+    clickText(panel, '確認傷害無誤');
+    expect(saved().current.fired[0]).toMatchObject({
       finishingShot: true, finishingReviewed: true, calibrationSample: 'verified',
     });
     expect(panel.querySelector<HTMLSelectElement>('.live-calibration-sample select')!.disabled).toBe(false);
@@ -212,8 +347,8 @@ describe('optional calibration lifecycle', () => {
     selectStatus('overflow');
     expect(panel.textContent).toContain('有效樣本 5 刀');
     expect(panel.textContent).toContain('已確認溢出尾刀：排除');
-    const saved = JSON.parse(localStorage.getItem('nikke-live-raid-fired-v1')!)[5];
-    expect(saved).toMatchObject({ calibrationSample: 'overflow', finishingReviewed: true });
+    const restoredShot = saved().current.fired[5];
+    expect(restoredShot).toMatchObject({ calibrationSample: 'overflow', finishingReviewed: true });
     const restored = setup();
     expect(restored.querySelector<HTMLSelectElement>('[aria-label="第 6 刀樣本狀態"]')!.value).toBe('overflow');
     selectStatus('verified');
@@ -223,7 +358,7 @@ describe('optional calibration lifecycle', () => {
 
   it('restores a legacy auto-excluded finisher as pending instead of silently including it', () => {
     seedTrend();
-    const fired = JSON.parse(localStorage.getItem('nikke-live-raid-fired-v1')!);
+    const fired = JSON.parse(localStorage.getItem(LIVE_SESSION_KEY) ?? 'null') ? saved().current.fired : JSON.parse(localStorage.getItem('nikke-live-raid-fired-v1')!);
     fired[0].finishingShot = true;
     localStorage.setItem('nikke-live-raid-fired-v1', JSON.stringify(fired));
     const panel = setup();
@@ -239,16 +374,16 @@ describe('optional calibration lifecycle', () => {
     seedTrend(); const panel = setup();
     clickText(panel, '預覽校正與重排');
     expect(FakeWorker.instances.at(-1)!.input!.candidates[0]!.damage).toBe(candidate.damage * 0.9);
-    expect(JSON.parse(localStorage.getItem(calibrationKey)!).factors).toEqual({});
+    expect(saved().current.calibration.factors).toEqual({});
     FakeWorker.instances.at(-1)!.emit({ kind: 'done', plan: plan(false) });
     expect(panel.textContent).toContain('尚未套用');
     clickText(panel, '確認套用校正');
-    expect(JSON.parse(localStorage.getItem(calibrationKey)!).factors).toEqual({ [group]: 0.9 });
+    expect(saved().current.calibration.factors).toEqual({ [group]: 0.9 });
     panel.querySelector<HTMLInputElement>('[role="switch"]')!.click();
-    expect(JSON.parse(localStorage.getItem(calibrationKey)!)).toEqual({ enabled: false, factors: {} });
+    expect(saved().current.calibration).toEqual({ enabled: false, factors: {} });
     expect(FakeWorker.instances.at(-1)!.input!.candidates[0]!.damage).toBe(candidate.damage);
     panel.querySelector<HTMLInputElement>('[role="switch"]')!.click();
-    expect(JSON.parse(localStorage.getItem(calibrationKey)!)).toEqual({ enabled: true, factors: {} });
+    expect(saved().current.calibration).toEqual({ enabled: true, factors: {} });
   });
 
   it('cancels stale preview results when a new shot is recorded', () => {
@@ -257,7 +392,7 @@ describe('optional calibration lifecycle', () => {
     panel.querySelector<HTMLButtonElement>('.live-quick-confirm button')!.click();
     oldPreview.emit({ kind: 'done', plan: plan(false) });
     expect(panel.querySelector('.live-calibration-preview')).toBeNull();
-    expect(JSON.parse(localStorage.getItem(calibrationKey)!).factors).toEqual({});
+    expect(saved().current.calibration.factors).toEqual({});
   });
 
   it('keeps current factors and plan when preview fails or is cancelled', () => {
@@ -270,7 +405,7 @@ describe('optional calibration lifecycle', () => {
     FakeWorker.instances.at(-1)!.emit({ kind: 'done', plan: plan(false) });
     clickText(panel, '取消');
     expect(panel.querySelector('.live-calibration-preview')).toBeNull();
-    expect(JSON.parse(localStorage.getItem(calibrationKey)!).factors).toEqual({});
+    expect(saved().current.calibration.factors).toEqual({});
   });
 
   it('invalidates previews after sample review without rerunning the current optimizer', () => {
@@ -290,13 +425,15 @@ describe('optional calibration lifecycle', () => {
     clickText(panel, '撤銷此刀型校正');
     expect(FakeWorker.instances.at(-1)!.input!.candidates[0]!.damage).toBe(candidate.damage);
     panel.querySelector<HTMLButtonElement>('[data-live-reset]')!.click();
-    expect(JSON.parse(localStorage.getItem(calibrationKey)!)).toEqual({ enabled: false, factors: {} });
+    clickText(panel, '確認清空');
+    expect(saved().current.calibration).toEqual({ enabled: false, factors: {} });
     panel.querySelector<HTMLInputElement>('[role="switch"]')!.click();
     const event = new Event('drop');
     Object.defineProperty(event, 'dataTransfer', { value: { files: [{ text: () => Promise.resolve(JSON.stringify(base)) }] } });
     panel.querySelector('[data-live-drop]')!.dispatchEvent(event);
     return Promise.resolve().then(() => {
-      expect(JSON.parse(localStorage.getItem(calibrationKey)!)).toEqual({ enabled: false, factors: {} });
+      clickText(panel, '確認匯入');
+      expect(saved().current.calibration).toEqual({ enabled: false, factors: {} });
     });
   });
 });
@@ -328,7 +465,7 @@ describe('live raid confirmed-state rendering', () => {
     FakeWorker.instances[0]!.emit({ kind: 'done', plan: plan(false) });
 
     panel.querySelector<HTMLButtonElement>('.live-recorder-card button')!.click();
-    const fired = JSON.parse(localStorage.getItem('nikke-live-raid-fired-v1')!) as unknown[];
+    const fired = saved().current.fired as unknown[];
     expect(fired).toHaveLength(1);
     expect(FakeWorker.instances).toHaveLength(2);
   });
@@ -354,7 +491,7 @@ describe('live raid confirmed-state rendering', () => {
     FakeWorker.instances[1]!.emit({ kind: 'error', message: '沒有可用的完整模擬結果。' });
     panel.querySelector<HTMLButtonElement>('.live-shot-row.is-pending button')?.click();
 
-    const fired = JSON.parse(localStorage.getItem('nikke-live-raid-fired-v1')!) as unknown[];
+    const fired = saved().current.fired as unknown[];
     expect(fired).toHaveLength(1);
   });
 
@@ -398,7 +535,7 @@ describe('live raid confirmed-state rendering', () => {
     expect(pending.querySelector('.live-shot-preview')!.textContent).toContain('水冷隊');
 
     pending.querySelector<HTMLButtonElement>(':scope > button')!.click();
-    const fired = JSON.parse(localStorage.getItem('nikke-live-raid-fired-v1')!) as Array<{ deckIndex: number; deckLabel?: string }>;
+    const fired = saved().current.fired as Array<{ deckIndex: number; deckLabel?: string }>;
     expect(fired).toEqual([expect.objectContaining({ deckIndex: 1, deckLabel: '水冷隊' })]);
   });
 
@@ -426,7 +563,7 @@ describe('live raid confirmed-state rendering', () => {
     expect(card.querySelector('select[aria-label="實際出刀成員"]')!.textContent).toContain('建議');
 
     card.querySelector<HTMLButtonElement>('.live-recorder-controls button')!.click();
-    const fired = JSON.parse(localStorage.getItem('nikke-live-raid-fired-v1')!) as Array<{ deckIndex: number }>;
+    const fired = saved().current.fired as Array<{ deckIndex: number }>;
     expect(fired).toEqual([expect.objectContaining({ deckIndex: 1 })]);
   });
 
@@ -440,8 +577,9 @@ describe('live raid confirmed-state rendering', () => {
       .toBe((candidate.damage / 100_000_000).toFixed(2));
     quick.querySelector<HTMLInputElement>('.live-damage-input')!.value = '58.5';
     quick.querySelector<HTMLButtonElement>('button')!.click();
+    clickText(panel, '確認傷害無誤');
 
-    const fired = JSON.parse(localStorage.getItem('nikke-live-raid-fired-v1')!) as Array<{ damage: number }>;
+    const fired = saved().current.fired as Array<{ damage: number }>;
     expect(fired).toEqual([expect.objectContaining({ damage: 58.5 * 100_000_000 })]);
   });
 
@@ -454,7 +592,7 @@ describe('live raid confirmed-state rendering', () => {
     quick.querySelector<HTMLInputElement>('.live-damage-input')!.value = '';
     quick.querySelector<HTMLButtonElement>('button')!.click();
 
-    expect(JSON.parse(localStorage.getItem('nikke-live-raid-fired-v1')!)).toEqual([]);
+    expect(saved().current.fired).toEqual([]);
     expect(panel.querySelector('[data-live-status]')!.textContent).toContain('大於 0');
   });
 
@@ -512,7 +650,7 @@ describe('live raid confirmed-state rendering', () => {
     expect(options).toHaveLength(2);
     options[1]!.click();
     card.querySelector<HTMLButtonElement>('.live-recorder-controls button')!.click();
-    const fired = JSON.parse(localStorage.getItem('nikke-live-raid-fired-v1')!) as Array<{ deckIndex: number }>;
+    const fired = saved().current.fired as Array<{ deckIndex: number }>;
     expect(fired).toEqual([expect.objectContaining({ deckIndex: 1 })]);
   });
 });

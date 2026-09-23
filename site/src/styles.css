@@ -2254,6 +2254,13 @@ body.bm-open { overflow: hidden; }
 .live-calibration-sample span { overflow-wrap: anywhere; }
 .live-calibration-sample select { max-width: 100%; padding: 6px; color: var(--ink); background: var(--panel); border: 1px solid var(--line); }
 .live-calibration summary { cursor: pointer; padding: 8px 0; }
+.live-session { margin: 12px 0; padding: 12px; border: 1px solid var(--line); border-radius: 8px; }
+.live-session .live-toolbar { flex-wrap: wrap; }
+.live-action-confirm:not(:empty) { margin-top: 10px; padding: 12px; border: 1px solid var(--amber); border-radius: 8px; }
+.live-action-confirm button, .live-action-confirm input { margin: 4px 8px 4px 0; }
+.live-action-confirm p, .live-calibration-effect { line-height: 1.6; }
+.live-history-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.live-history-row span { flex: 1 1 240px; overflow-wrap: anywhere; }
 .live-quick-confirm .live-damage-input { width: 78px; min-height: 30px; }
 .live-quick-confirm .roster-import { min-height: 30px; padding: 5px 10px; font-size: 10px; }
 .live-recommendation-item { width: 100%; justify-content: flex-start; }

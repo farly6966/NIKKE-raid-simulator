@@ -25,6 +25,8 @@ export interface FiredShot {
   /** 出刀當下的原始模擬與採用預估；舊紀錄沒有快照時不自動納入分析。 */
   simulatedDamage?: number;
   predictedDamage?: number;
+  /** 僅記錄出刀當下採用的校正版本；舊樣本不回填，避免拿訓練樣本評分。 */
+  calibrationRevision?: string;
   calibrationSample?: 'verified' | 'unreviewed' | 'abnormal' | 'overflow';
   /** 依剩餘 HP 推測的收尾刀，只作提示，不代表傷害被截斷。 */
   finishingShot?: boolean;
