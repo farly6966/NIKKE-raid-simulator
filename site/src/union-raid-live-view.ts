@@ -84,6 +84,7 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
   const calibrationBox = el('section', 'live-calibration');
   summaryBox.before(calibrationBox);
   const calibrationPanel = mountCalibrationPanel(calibrationBox, {
+    labelOf: deps.labelOf,
     change: (next, preview) => {
       calibration = next;
       persist();
