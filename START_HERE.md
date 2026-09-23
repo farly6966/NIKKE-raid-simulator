@@ -14,7 +14,7 @@
 
 ## 第一次使用這台電腦
 
-需要 Git、Node.js 22 以上、Python 3，以及可推送本專案的 GitHub 登入權限。套件依照 `site/package-lock.json` 安裝，不必搬移另一台電腦的 `node_modules`。
+需要 Git、Node.js 24（或 22.13 以上的 22.x）、Python 3，以及可推送本專案的 GitHub 登入權限。Node 版本須符合 `site/package-lock.json` 內 Vite／Vitest／jsdom 的需求；套件依照 lockfile 安裝，不必搬移另一台電腦的 `node_modules`。
 
 在想放專案的目錄執行（也可以請 Codex 代做）：
 

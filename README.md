@@ -50,7 +50,7 @@
 
 ## 로컬 실행
 
-Node.js 22 이상과 Python 3가 필요합니다.
+Node.js 24(또는 22.13 이상인 22.x)와 Python 3가 필요합니다.
 
 ```bash
 cd site
