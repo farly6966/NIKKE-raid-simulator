@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { calibrationGroupKey } from './union-raid-calibration';
 import { mountLiveRaid } from './union-raid-live-view';
 import { RAID_DAMAGE_SCALE, type RaidPlannerCandidate, type RaidPlannerInput, type RaidPlannerPlan } from './union-raid-planner';
 
@@ -29,6 +30,8 @@ const candidate: RaidPlannerCandidate = {
   squad: ['角色A', '角色B', '角色C', '角色D', '角色E'],
   damage: 60 * RAID_DAMAGE_SCALE,
 };
+
+const group = calibrationGroupKey(candidate)!;
 
 const base: RaidPlannerInput = {
   phases: Array.from({ length: 3 }, () => Array(5).fill(300 * RAID_DAMAGE_SCALE)),
@@ -92,23 +95,75 @@ describe('optional calibration lifecycle', () => {
   };
   const seedTrend = (): void => {
     localStorage.setItem('nikke-live-raid-fired-v1', JSON.stringify(Array.from({ length: 5 }, (_, i) => ({
-      ...candidate, memberId: `past-${i}`, squad: [], phase: 0,
+      ...candidate, memberId: `past-${i}`, squad: [...candidate.squad].reverse(), phase: 0,
       damage: 0.9 * candidate.damage, simulatedDamage: candidate.damage,
       predictedDamage: candidate.damage, calibrationSample: 'verified', finishingShot: false,
     }))));
   };
 
+  it.each([
+    [470, '模擬低估 10.85%'], [378, '模擬高估 10.85%'], [424, '與模擬相同'],
+  ])('labels actual %s against simulated 424 with a clear direction', (actual, label) => {
+    localStorage.setItem('nikke-live-raid-fired-v1', JSON.stringify([{
+      ...candidate, memberId: 'past', phase: 0, damage: actual * 100_000_000,
+      simulatedDamage: 424 * 100_000_000, calibrationSample: 'verified',
+    }]));
+    const panel = setup();
+    const row = panel.querySelector('.live-calibration-sample')!;
+    expect(row.textContent).toContain(label);
+    expect(row.textContent).not.toContain('倍率 ×');
+    expect(panel.textContent).toContain('有效樣本 1 刀');
+    expect(panel.textContent).toContain('樣本不足');
+  });
+
+  it('discards legacy boss-wide factors with a notice while retaining historical shots', () => {
+    seedTrend(); const saved = localStorage.getItem('nikke-live-raid-fired-v1');
+    const panel = setup(true, { 0: 0.9 });
+    expect(panel.textContent).toContain('已清除舊版整隻王的校正係數');
+    expect(FakeWorker.instances.at(-1)!.input!.candidates[0]!.damage).toBe(candidate.damage);
+    expect(localStorage.getItem('nikke-live-raid-fired-v1')).toBe(saved);
+    expect(panel.textContent).toContain('有效樣本 5 刀');
+  });
+
+  it('keeps different squads separate in sample counts, preview, apply and revoke', () => {
+    const other = { ...candidate, id: 1, deckIndex: 1, squad: ['角色A', '角色B', '角色C', '角色D', '角色F'] };
+    const otherGroup = calibrationGroupKey(other)!;
+    localStorage.setItem('nikke-live-raid-base-v1', JSON.stringify({ ...base, candidates: [candidate, other] }));
+    seedTrend();
+    const fired = JSON.parse(localStorage.getItem('nikke-live-raid-fired-v1')!);
+    fired[3].squad = other.squad; fired[4].squad = other.squad;
+    localStorage.setItem('nikke-live-raid-fired-v1', JSON.stringify(fired));
+    const split = setup();
+    const cards = split.querySelectorAll('.live-calibration-boss');
+    expect(cards).toHaveLength(2);
+    expect(cards[0]!.textContent).toContain('有效樣本 3 刀');
+    expect(cards[1]!.textContent).toContain('有效樣本 2 刀');
+    expect([...split.querySelectorAll('button')].some(b => b.textContent === '預覽校正與重排')).toBe(false);
+    seedTrend(); const panel = setup(true, { [otherGroup]: 0.8 });
+    clickText(panel, '預覽校正與重排');
+    expect(FakeWorker.instances.at(-1)!.input!.candidates.map(c => c.damage))
+      .toEqual([candidate.damage * 0.9, other.damage * 0.8]);
+    FakeWorker.instances.at(-1)!.emit({ kind: 'done', plan: plan(false) });
+    expect(panel.querySelector('.live-calibration-preview')!.textContent).toContain('角色E');
+    clickText(panel, '確認套用校正');
+    expect(JSON.parse(localStorage.getItem(calibrationKey)!).factors).toEqual({ [group]: 0.9, [otherGroup]: 0.8 });
+    clickText(panel, '撤銷此刀型校正');
+    expect(JSON.parse(localStorage.getItem(calibrationKey)!).factors).toEqual({ [otherGroup]: 0.8 });
+    expect(FakeWorker.instances.at(-1)!.input!.candidates.map(c => c.damage))
+      .toEqual([candidate.damage, other.damage * 0.8]);
+  });
+
   it('defaults off and restores a disabled saved state without applying its factors', () => {
     const panel = host(); mountLiveRaid({ panel }, { imageOf: () => undefined, labelOf: n => n });
     expect(panel.querySelector<HTMLInputElement>('[role="switch"]')!.checked).toBe(false);
     expect(FakeWorker.instances.at(-1)!.input!.candidates[0]!.damage).toBe(candidate.damage);
-    const disabled = setup(false, { 0: 0.9 });
+    const disabled = setup(false, { [group]: 0.9 });
     expect(disabled.textContent).toContain('目前關閉');
     expect(FakeWorker.instances.at(-1)!.input!.candidates[0]!.damage).toBe(candidate.damage);
   });
 
   it('uses calibrated estimates in manual and pending forms, retaining both snapshots', () => {
-    const panel = setup(true, { 0: 0.5 });
+    const panel = setup(true, { [group]: 0.5 });
     expect(FakeWorker.instances.at(-1)!.input!.candidates[0]!.damage).toBe(candidate.damage * 0.5);
     expect(panel.querySelector<HTMLInputElement>('.live-recorder-card .live-damage-input')!.value).toBe('0.03');
     expect(panel.querySelector<HTMLInputElement>('.live-shot-row.is-pending .live-damage-input')!.value).toBe('0.03');
@@ -188,7 +243,7 @@ describe('optional calibration lifecycle', () => {
     FakeWorker.instances.at(-1)!.emit({ kind: 'done', plan: plan(false) });
     expect(panel.textContent).toContain('尚未套用');
     clickText(panel, '確認套用校正');
-    expect(JSON.parse(localStorage.getItem(calibrationKey)!).factors).toEqual({ 0: 0.9 });
+    expect(JSON.parse(localStorage.getItem(calibrationKey)!).factors).toEqual({ [group]: 0.9 });
     panel.querySelector<HTMLInputElement>('[role="switch"]')!.click();
     expect(JSON.parse(localStorage.getItem(calibrationKey)!)).toEqual({ enabled: false, factors: {} });
     expect(FakeWorker.instances.at(-1)!.input!.candidates[0]!.damage).toBe(candidate.damage);
@@ -231,8 +286,8 @@ describe('optional calibration lifecycle', () => {
   });
 
   it('clears calibration on reset and reimport, but preserves historical shot snapshots on undo calibration', () => {
-    const panel = setup(true, { 0: 0.9 });
-    clickText(panel, '撤銷此王校正');
+    const panel = setup(true, { [group]: 0.9 });
+    clickText(panel, '撤銷此刀型校正');
     expect(FakeWorker.instances.at(-1)!.input!.candidates[0]!.damage).toBe(candidate.damage);
     panel.querySelector<HTMLButtonElement>('[data-live-reset]')!.click();
     expect(JSON.parse(localStorage.getItem(calibrationKey)!)).toEqual({ enabled: false, factors: {} });

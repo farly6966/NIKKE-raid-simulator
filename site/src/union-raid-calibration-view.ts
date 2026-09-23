@@ -1,4 +1,4 @@
-import { calibratedCandidates, calibrationSampleStatus, calibrationTrend, sampleRatio, type CalibrationState } from './union-raid-calibration';
+import { calibratedCandidates, calibrationGroupKey, calibrationSampleStatus, calibrationTrend, sampleRatio, type CalibrationState } from './union-raid-calibration';
 import { remainingCandidates, remainingPhases, usedCounts, type FiredShot } from './union-raid-live';
 import type { RaidPlannerInput, RaidPlannerPlan } from './union-raid-planner';
 
@@ -14,12 +14,14 @@ const node = <K extends keyof HTMLElementTagNameMap>(tag: K, text?: string): HTM
   if (text !== undefined) element.textContent = text;
   return element;
 };
-const percent = (ratio: number): string => `${((ratio - 1) * 100).toFixed(1)}%`;
+const deviation = (ratio: number): string => ratio === 1 ? '與模擬相同'
+  : `模擬${ratio > 1 ? '低估' : '高估'} ${Math.abs((ratio - 1) * 100).toFixed(2)}%`;
 const yi = (damage: number): string => `${(damage / 100_000_000).toFixed(2)} 億`;
 const reached = { phase1: '第 1 階段', phase2: '第 2 階段', phase3: '第 3 階段', endless: '無限五王' };
 
 /** 預覽使用獨立 worker；任一盤面變動立即作廢，絕不把舊預覽套到新紀錄。 */
 export function mountCalibrationPanel(host: HTMLElement, callbacks: {
+  labelOf: (name: string) => string;
   change: (state: CalibrationState, preview?: RaidPlannerPlan) => void;
   samplesChanged: (replan?: boolean) => void;
 }) {
@@ -79,28 +81,37 @@ export function mountCalibrationPanel(host: HTMLElement, callbacks: {
     host.append(title, node('p', state.enabled
       ? '已開啟分析。係數可能無法解釋模型誤差；僅供本盤手動試算，預覽並確認後才影響排刀。'
       : '目前關閉，排刀使用原始模擬值；實際回填仍會正常扣血、扣刀並重排。'));
+    if (state.legacyFactorsCleared) host.append(node('p', '已清除舊版整隻王的校正係數；出刀紀錄保留，請依同王、同五人刀型重新預覽確認。'));
     if (!state.enabled) return;
-    host.append(node('p', '各王分開分析；只納入已核對且條件可比較的完整出刀。套用後會調整該王各階段所有剩餘候選隊伍，請先檢查隊伍及階段差異。已採用係數不隨樣本增減自動更新，可隨時撤銷。'));
+    host.append(node('p', '同王、同五人刀型分開分析（排列順序不限）；每種刀型獨立累積 5 刀、3 位成員。只納入已核對且條件可比較的完整出刀，套用僅影響該王同刀型的剩餘候選。階段、爆裂與操作條件仍需人工核對。已採用係數不隨樣本增減自動更新，可隨時撤銷。'));
+    const groups = new Map<string, { bossName: string; squad: string[] }>();
+    for (const row of [...base.candidates, ...fired]) {
+      const key = calibrationGroupKey(row);
+      if (key && !groups.has(key)) groups.set(key, row);
+    }
+    const groupLabel = (key: string): string => {
+      const group = groups.get(key);
+      return group ? `${group.bossName}／${group.squad.map(callbacks.labelOf).join('、')}` : '未知刀型';
+    };
     const grid = node('div'); grid.className = 'live-calibration-grid';
-    for (let boss = 0; boss < 5; boss++) {
-      if (!base.candidates.some(c => c.bossIndex === boss)) continue;
-      const trend = calibrationTrend(fired, boss);
+    for (const [key, group] of groups) {
+      const trend = calibrationTrend(fired, key);
       const card = node('section'); card.className = 'live-calibration-boss';
-      const name = base.candidates.find(c => c.bossIndex === boss)!.bossName;
-      const factor = state.factors[boss] ?? 1;
-      card.append(node('strong', name), node('p', `有效樣本 ${trend.count} 刀／${trend.members} 人 · 目前係數 ×${factor.toFixed(3)}`));
+      const factor = state.factors[key] ?? 1;
+      card.append(node('strong', group.bossName), node('p', `刀型：${group.squad.map(callbacks.labelOf).join('、')}`),
+        node('p', `有效樣本 ${trend.count} 刀／${trend.members} 人 · 目前係數 ×${factor.toFixed(4)}`));
       const description = !trend.enough ? '樣本不足：至少需 5 刀、3 位成員。'
         : !trend.stable ? '偏差分散，暫不建議統一比例校正。'
         : trend.factor < 0.5 || trend.factor > 1.5 ? '偏差過大，請先核對模擬條件；不提供比例校正。'
         : !trend.ready ? '目前未達 5% 偏差提醒門檻。'
-        : `實際傷害較原始模擬${trend.factor < 1 ? '低' : '高'}約 ${Math.abs((trend.factor - 1) * 100).toFixed(1)}%。建議 ×${trend.factor.toFixed(3)}。`;
+        : `${deviation(trend.factor)}。建議係數 ×${trend.factor.toFixed(4)}。`;
       card.append(node('p', description));
       if (trend.ready && Math.abs(trend.factor - factor) >= 0.005) {
-        const action = button('預覽校正與重排', () => startPreview({ enabled: true, factors: { ...state.factors, [boss]: trend.factor } }));
+        const action = button('預覽校正與重排', () => startPreview({ enabled: true, factors: { ...state.factors, [key]: trend.factor } }));
         action.disabled = !plan || !!worker; card.append(action);
       }
-      if (factor !== 1) card.append(button('撤銷此王校正', () => {
-        const factors = { ...state.factors }; delete factors[boss]; cancel(); callbacks.change({ enabled: true, factors });
+      if (factor !== 1) card.append(button('撤銷此刀型校正', () => {
+        const factors = { ...state.factors }; delete factors[key]; cancel(); callbacks.change({ enabled: true, factors });
       }));
       grid.append(card);
     }
@@ -112,8 +123,8 @@ export function mountCalibrationPanel(host: HTMLElement, callbacks: {
     if (preview && plan) {
       const box = node('section'); box.className = 'live-calibration-preview'; box.setAttribute('aria-label', '校正重排預覽');
       box.append(node('h4', '校正重排預覽（尚未套用）'));
-      for (const [boss, factor] of Object.entries(preview.state.factors)) {
-        if (factor !== (state.factors[boss] ?? 1)) box.append(node('p', `${base.candidates.find(c => c.bossIndex === Number(boss))?.bossName}：係數 ×${(state.factors[boss] ?? 1).toFixed(3)} → ×${factor.toFixed(3)}`));
+      for (const [key, factor] of Object.entries(preview.state.factors)) {
+        if (factor !== (state.factors[key] ?? 1)) box.append(node('p', `${groupLabel(key)}：係數 ×${(state.factors[key] ?? 1).toFixed(4)} → ×${factor.toFixed(4)}`));
       }
       box.append(node('p', `推進階段：${reached[plan.reached]} → ${reached[preview.plan.reached]}；剩餘排刀數：${plan.plannedAttacks} → ${preview.plan.plannedAttacks}；無限五王預估：${yi(plan.endlessDamage)} → ${yi(preview.plan.endlessDamage)}。`));
       box.append(node('p', '前後使用不同傷害假設；預估數字增加不代表實際輸出提升。'));
@@ -146,12 +157,14 @@ export function mountCalibrationPanel(host: HTMLElement, callbacks: {
     fired.forEach((shot, index) => {
       const row = node('div'); row.className = 'live-calibration-sample';
       const ratio = sampleRatio(shot);
-      row.append(node('span', `${index + 1}. ${shot.memberName}／${shot.bossName}／${shot.phase === 3 ? '無限' : `${shot.phase + 1}階`}／${shot.deckLabel || `第 ${shot.deckIndex + 1} 隊`}：實際 ${yi(shot.damage)}${ratio === undefined ? '；舊紀錄缺少模擬快照，不納入' : `；原始 ${yi(shot.simulatedDamage!)}（${percent(ratio)}）；當時預估 ${yi(shot.predictedDamage ?? shot.simulatedDamage!)}`}`));
+      row.append(node('span', `${index + 1}. ${shot.memberName}／${shot.bossName}／${shot.phase === 3 ? '無限' : `${shot.phase + 1}階`}／${shot.deckLabel || `第 ${shot.deckIndex + 1} 隊`}：實際 ${yi(shot.damage)}${ratio === undefined ? '；舊紀錄缺少有效模擬快照，不納入' : `；原始 ${yi(shot.simulatedDamage!)}；${deviation(ratio)}；當時預估 ${yi(shot.predictedDamage ?? shot.simulatedDamage!)}`}`));
+      const group = calibrationGroupKey(shot);
+      row.append(node('span', group ? `刀型：${shot.squad.map(callbacks.labelOf).join('、')}` : '缺少完整五人編成，不納入刀型分析'));
       const select = node('select'); select.ariaLabel = `第 ${index + 1} 刀樣本狀態`;
       for (const [value, label] of [['unreviewed', '待確認／暫不納入'], ['verified', '正常完整出刀／極限收尾（納入）'], ['overflow', '已確認溢出尾刀（排除）'], ['abnormal', '失誤／斷線／條件不同（排除）']]) {
         const option = node('option', label); option.value = value!; select.append(option);
       }
-      select.value = calibrationSampleStatus(shot); select.disabled = ratio === undefined;
+      select.value = calibrationSampleStatus(shot); select.disabled = ratio === undefined || !group;
       select.addEventListener('change', () => {
         shot.calibrationSample = select.value as FiredShot['calibrationSample'];
         shot.finishingReviewed = select.value !== 'unreviewed'; callbacks.samplesChanged();

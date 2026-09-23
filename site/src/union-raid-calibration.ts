@@ -4,28 +4,49 @@ import type { RaidPlannerCandidate } from './union-raid-planner';
 export interface CalibrationState {
   enabled: boolean;
   factors: Record<string, number>;
+  legacyFactorsCleared?: boolean;
 }
 
 export const freshCalibration = (): CalibrationState => ({ enabled: false, factors: {} });
+
+/** 同王、相同五人即為同刀型；不以排列、成員或隊伍名稱區分。 */
+export function calibrationGroupKey(row: Pick<RaidPlannerCandidate, 'bossIndex' | 'squad'>): string | undefined {
+  if (!Number.isInteger(row.bossIndex) || row.bossIndex < 0 || row.bossIndex > 4
+    || !Array.isArray(row.squad) || row.squad.length !== 5
+    || row.squad.some(name => typeof name !== 'string' || !name.trim())
+    || new Set(row.squad).size !== 5) return undefined;
+  return JSON.stringify([row.bossIndex, [...row.squad].sort()]);
+}
+
+function validGroupKey(key: string): boolean {
+  try {
+    const value: unknown = JSON.parse(key);
+    return Array.isArray(value) && value.length === 2
+      && calibrationGroupKey({ bossIndex: value[0], squad: value[1] }) === key;
+  } catch { return false; }
+}
 
 /** 儲存狀態不合法時回到關閉；係數不會從另一份匯入資料沿用。 */
 export function readCalibration(value: unknown): CalibrationState {
   if (!value || typeof value !== 'object') return freshCalibration();
   const state = value as Partial<CalibrationState>;
   const factors: Record<string, number> = {};
+  let legacyFactorsCleared = state.legacyFactorsCleared === true;
   if (state.factors && typeof state.factors === 'object') {
-    for (const [boss, factor] of Object.entries(state.factors)) {
-      if (/^[0-4]$/.test(boss) && Number.isFinite(factor) && factor >= 0.5 && factor <= 1.5) factors[boss] = factor;
+    for (const [key, factor] of Object.entries(state.factors)) {
+      if (/^[0-4]$/.test(key)) legacyFactorsCleared = true;
+      if (validGroupKey(key) && Number.isFinite(factor) && factor >= 0.5 && factor <= 1.5) factors[key] = factor;
     }
   }
-  return { enabled: state.enabled === true, factors };
+  return { enabled: state.enabled === true, factors, ...(legacyFactorsCleared ? { legacyFactorsCleared: true } : {}) };
 }
 
 /** 一律由原始候選值衍生，不改寫原資料，也不連乘已校正值。 */
 export function calibratedCandidates(base: RaidPlannerCandidate[], state: CalibrationState): RaidPlannerCandidate[] {
-  return base.map(candidate => ({ ...candidate,
-    damage: candidate.damage * (state.enabled ? state.factors[candidate.bossIndex] ?? 1 : 1),
-  }));
+  return base.map(candidate => {
+    const key = calibrationGroupKey(candidate);
+    return { ...candidate, damage: candidate.damage * (state.enabled && key ? state.factors[key] ?? 1 : 1) };
+  });
 }
 
 const median = (values: number[]): number => {
@@ -46,8 +67,8 @@ export function calibrationSampleStatus(shot: FiredShot): NonNullable<FiredShot[
   return shot.calibrationSample ?? 'unreviewed';
 }
 
-export function calibrationTrend(fired: FiredShot[], boss: number) {
-  const samples = fired.filter(shot => shot.bossIndex === boss && calibrationSampleStatus(shot) === 'verified'
+export function calibrationTrend(fired: FiredShot[], group: string) {
+  const samples = fired.filter(shot => calibrationGroupKey(shot) === group && calibrationSampleStatus(shot) === 'verified'
     && sampleRatio(shot) !== undefined);
   const ratios = samples.map(shot => sampleRatio(shot)!);
   const members = new Set(samples.map(shot => shot.memberId)).size;
