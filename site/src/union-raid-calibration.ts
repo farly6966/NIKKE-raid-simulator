@@ -5,6 +5,7 @@ export interface CalibrationState {
   enabled: boolean;
   factors: Record<string, number>;
   legacyFactorsCleared?: boolean;
+  revisions?: Record<string, string>;
 }
 
 export const freshCalibration = (): CalibrationState => ({ enabled: false, factors: {} });
@@ -31,14 +32,44 @@ export function readCalibration(value: unknown): CalibrationState {
   if (!value || typeof value !== 'object') return freshCalibration();
   const state = value as Partial<CalibrationState>;
   const factors: Record<string, number> = {};
+  const revisions: Record<string, string> = {};
   let legacyFactorsCleared = state.legacyFactorsCleared === true;
   if (state.factors && typeof state.factors === 'object') {
     for (const [key, factor] of Object.entries(state.factors)) {
       if (/^[0-4]$/.test(key)) legacyFactorsCleared = true;
       if (validGroupKey(key) && Number.isFinite(factor) && factor >= 0.5 && factor <= 1.5) factors[key] = factor;
+      const revision = state.revisions?.[key];
+      if (key in factors && typeof revision === 'string' && /^[\w-]{1,100}$/.test(revision)) revisions[key] = revision;
     }
   }
-  return { enabled: state.enabled === true, factors, ...(legacyFactorsCleared ? { legacyFactorsCleared: true } : {}) };
+  return { enabled: state.enabled === true, factors,
+    ...(Object.keys(revisions).length ? { revisions } : {}),
+    ...(legacyFactorsCleared ? { legacyFactorsCleared: true } : {}) };
+}
+
+/** 每次改係數都開始新一輪評估；升級舊盤時，只從下一筆出刀開始追蹤。 */
+export function trackCalibration(next: CalibrationState, previous?: CalibrationState): CalibrationState {
+  const revisions: Record<string, string> = {};
+  if (next.enabled) for (const [key, factor] of Object.entries(next.factors)) {
+    if (factor === 1) continue;
+    revisions[key] = previous
+      ? (previous.enabled && previous.factors[key] === factor ? previous.revisions?.[key] : undefined) ?? crypto.randomUUID()
+      : next.revisions?.[key] ?? crypto.randomUUID();
+  }
+  const { revisions: _old, ...rest } = next;
+  return { ...rest, ...(Object.keys(revisions).length ? { revisions } : {}) };
+}
+
+export function calibrationEffect(fired: FiredShot[], group: string, revision?: string) {
+  const samples = revision ? fired.filter(shot => shot.calibrationRevision === revision
+    && calibrationGroupKey(shot) === group && calibrationSampleStatus(shot) === 'verified'
+    && sampleRatio(shot) !== undefined && Number.isFinite(shot.predictedDamage) && shot.predictedDamage! > 0) : [];
+  const meanError = (prediction: (shot: FiredShot) => number): number => samples.length
+    ? samples.reduce((sum, shot) => sum + Math.abs(prediction(shot) - shot.damage) / shot.damage, 0) / samples.length : 0;
+  const originalError = meanError(shot => shot.simulatedDamage!);
+  const calibratedError = meanError(shot => shot.predictedDamage!);
+  return { count: samples.length, originalError, calibratedError,
+    worse: samples.length >= 5 && calibratedError > originalError + 0.01 };
 }
 
 /** 一律由原始候選值衍生，不改寫原資料，也不連乘已校正值。 */

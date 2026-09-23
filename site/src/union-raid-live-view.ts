@@ -1,5 +1,5 @@
 import { squadPreview } from './share-panel';
-import { calibratedCandidates, freshCalibration, readCalibration } from './union-raid-calibration';
+import { calibratedCandidates, calibrationGroupKey, freshCalibration, readCalibration, trackCalibration } from './union-raid-calibration';
 import { mountCalibrationPanel } from './union-raid-calibration-view';
 import {
   memberAttackCapacity, type RaidPlannerCandidate, type RaidPlannerInput, type RaidPlannerPlan,
@@ -8,6 +8,8 @@ import {
 import {
   actualPhaseIndex, findCandidate, remainingCandidates, remainingPhases, usedCounts, type FiredShot,
 } from './union-raid-live';
+import { LIVE_SESSION_KEY, makeLiveBackup, readLiveBase, readLiveImport, readLiveShots, readLiveStored,
+  unusualDamage, type LiveRecovery, type LiveSession } from './union-raid-session';
 
 export interface LiveRaidHosts {
   panel: HTMLElement;
@@ -81,12 +83,25 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
   let worker: Worker | undefined;
   let lastPendingKeys = new Set<string>();
   let calibration = freshCalibration();
+  let recovery: LiveRecovery | undefined;
+  let mutation = 0;
+  const sessionBox = el('section', 'live-session');
+  sessionBox.setAttribute('aria-label', '實戰進度備份與還原');
+  const saveStatus = el('p', 'field-note'); saveStatus.setAttribute('role', 'status');
+  const actions = el('div', 'live-toolbar');
+  const exportButton = el('button', 'roster-import', '匯出實戰進度'); exportButton.type = 'button';
+  const recoverButton = el('button', 'roster-import', '還原上一份進度'); recoverButton.type = 'button';
+  const actionBox = el('section', 'live-action-confirm');
+  actionBox.setAttribute('aria-label', '操作確認'); actionBox.setAttribute('role', 'region');
+  const history = el('details', 'live-history');
+  actions.append(exportButton, recoverButton); sessionBox.append(actions, saveStatus, actionBox, history);
+  board.before(sessionBox);
   const calibrationBox = el('section', 'live-calibration');
   summaryBox.before(calibrationBox);
   const calibrationPanel = mountCalibrationPanel(calibrationBox, {
     labelOf: deps.labelOf,
     change: (next, preview) => {
-      calibration = next;
+      calibration = trackCalibration(next, calibration);
       persist();
       if (preview) {
         worker?.terminate(); worker = undefined;
@@ -98,28 +113,121 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
       } else resolve();
     },
     samplesChanged: (replan) => { persist(); if (replan) resolve(); else renderAll(lastPendingKeys); },
+    editShot,
+    removeShot,
   });
   const effectiveCandidates = (): RaidPlannerCandidate[] => calibratedCandidates(base?.candidates ?? [], calibration);
 
   const persist = (): void => {
+    mutation++; actionBox.replaceChildren();
+    exportButton.disabled = !base; recoverButton.disabled = !recovery;
+    recoverButton.textContent = recovery ? `還原上一份進度（${recovery.label}）` : '還原上一份進度';
+    if (!base) return;
     try {
-      if (base) localStorage.setItem(BASE_KEY, JSON.stringify(base));
-      localStorage.setItem(FIRED_KEY, JSON.stringify(fired));
-      localStorage.setItem(CALIBRATION_KEY, JSON.stringify(calibration));
-    } catch { /* Storage can be unavailable. */ }
+      const current = makeLiveBackup({ base, fired, calibration });
+      // 盤面、出刀、係數與還原點一次寫入，避免部分成功造成彼此不一致。
+      localStorage.setItem(LIVE_SESSION_KEY, JSON.stringify({ current, recovery }));
+      saveStatus.textContent = `已儲存至此瀏覽器：${new Date(current.savedAt).toLocaleString('zh-TW')}。可匯出備份交接或換電腦。`;
+    } catch {
+      saveStatus.textContent = '尚未存入此瀏覽器：儲存空間不足或儲存被停用。畫面仍保有目前進度，請立即匯出實戰進度備份。';
+    }
   };
 
   const restore = (): void => {
     try {
+      const current = localStorage.getItem(LIVE_SESSION_KEY);
+      if (current) {
+        const saved = readLiveStored(JSON.parse(current));
+        base = saved.current.base; fired = saved.current.fired; calibration = trackCalibration(saved.current.calibration);
+        recovery = saved.recovery; persist(); return;
+      }
       const savedBase = localStorage.getItem(BASE_KEY);
       const savedFired = localStorage.getItem(FIRED_KEY);
-      if (savedBase) base = JSON.parse(savedBase) as RaidPlannerInput;
-      if (savedFired) fired = JSON.parse(savedFired) as FiredShot[];
-    } catch { /* Corrupt storage must not block opening the tab. */ }
-    try {
-      calibration = readCalibration(JSON.parse(localStorage.getItem(CALIBRATION_KEY) ?? 'null'));
-    } catch { calibration = freshCalibration(); }
+      if (savedBase) {
+        const nextBase = readLiveBase(JSON.parse(savedBase));
+        const nextFired = savedFired ? readLiveShots(JSON.parse(savedFired)) : [];
+        try { calibration = readCalibration(JSON.parse(localStorage.getItem(CALIBRATION_KEY) ?? 'null')); }
+        catch { calibration = freshCalibration(); }
+        base = nextBase; fired = nextFired; calibration = trackCalibration(calibration); persist();
+      } else saveStatus.textContent = '匯入試算結果或實戰進度備份後，會自動儲存在此瀏覽器。';
+    } catch {
+      saveStatus.textContent = '無法讀取此瀏覽器的實戰進度。原有儲存內容保留，請匯入有效備份還原。';
+    }
+    exportButton.disabled = !base; recoverButton.disabled = !recovery;
   };
+
+  function checkpoint(label: string): void {
+    if (base) recovery = { label, snapshot: makeLiveBackup({ base, fired, calibration }) };
+  }
+
+  function requestAction(message: string, label: string, action: () => void): void {
+    const version = mutation;
+    const confirm = el('button', 'roster-import', label); confirm.type = 'button';
+    const cancel = el('button', 'roster-import', '取消操作'); cancel.type = 'button';
+    confirm.addEventListener('click', () => { if (mutation === version) { actionBox.replaceChildren(); action(); } });
+    cancel.addEventListener('click', () => actionBox.replaceChildren());
+    actionBox.replaceChildren(el('p', undefined, message), confirm, cancel);
+    actionBox.scrollIntoView?.({ block: 'nearest' }); cancel.focus();
+  }
+
+  function applySession(next: LiveSession): void {
+    base = next.base; fired = next.fired; calibration = trackCalibration(next.calibration);
+    lastPendingKeys = new Set(); plan = undefined;
+    importBox.hidden = true; board.hidden = false; importStatus.textContent = '';
+    persist(); resolve();
+  }
+
+  exportButton.addEventListener('click', () => {
+    if (!base) return;
+    try {
+      const backup = makeLiveBackup({ base, fired, calibration });
+      const url = URL.createObjectURL(new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' }));
+      const revoke = URL.revokeObjectURL.bind(URL);
+      const link = document.createElement('a'); link.href = url;
+      link.download = `實戰進度_${backup.savedAt.replace(/[:.]/g, '-')}.json`; link.click();
+      setTimeout(() => revoke(url), 1000);
+    } catch { saveStatus.textContent = '備份下載失敗，請重試；目前畫面中的進度仍保留。'; }
+  });
+  recoverButton.addEventListener('click', () => {
+    if (!recovery) return;
+    const selected = recovery;
+    requestAction(`還原「${selected.label}」保存的進度（${selected.snapshot.fired.length} 刀）？目前盤面將保留為新的還原點。`, '確認還原', () => {
+      checkpoint('還原前'); applySession(selected.snapshot);
+    });
+  });
+
+  function removeShot(shot: FiredShot): void {
+    const index = fired.indexOf(shot);
+    if (index < 0) return;
+    checkpoint('撤銷出刀前'); fired.splice(index, 1); persist(); resolve();
+  }
+
+  function editShot(shot: FiredShot): void {
+    const version = mutation;
+    const input = el('input', 'live-damage-input'); input.type = 'number'; input.min = '0.01'; input.step = '0.01';
+    input.value = String(shot.damage / YI); input.ariaLabel = '修改實際傷害（億）';
+    const save = el('button', 'roster-import', '儲存傷害修改'); save.type = 'button';
+    const cancel = el('button', 'roster-import', '取消操作'); cancel.type = 'button';
+    const feedback = el('p', 'field-note'); feedback.setAttribute('role', 'status');
+    save.addEventListener('click', () => {
+      const damage = Number(input.value) * YI;
+      if (!Number.isFinite(damage) || damage <= 0) { feedback.textContent = '請填入大於 0 的傷害（億）。'; return; }
+      const apply = (): void => {
+        if (mutation !== version || !base || !fired.includes(shot)) return;
+        checkpoint('修改傷害前'); shot.damage = damage;
+        const hpBefore = remainingPhases(base.phases, fired.slice(0, fired.indexOf(shot)))[shot.phase]?.[shot.bossIndex];
+        shot.finishingShot = shot.phase < 3 && hpBefore !== undefined && damage >= hpBefore;
+        shot.calibrationSample = 'unreviewed'; shot.finishingReviewed = false;
+        persist(); resolve();
+      };
+      if (unusualDamage(damage, shot.predictedDamage ?? shot.simulatedDamage)) requestAction(
+        `修改為 ${yi(damage)}，與當時預估 ${yi(shot.predictedDamage ?? shot.simulatedDamage!)} 差距較大。請核對單位為「億」，以及是否為未打滿的尾刀。`, '確認傷害無誤', apply);
+      else apply();
+    });
+    cancel.addEventListener('click', () => actionBox.replaceChildren());
+    actionBox.replaceChildren(el('p', undefined, `修改 ${shot.memberName}／${shot.bossName} 的實際傷害；修改後需重新核對樣本分類，原始模擬與當時預估保留。`), input, save, cancel, feedback);
+    actionBox.scrollIntoView?.({ block: 'nearest' }); input.focus();
+  }
 
   function resolve(): void {
     if (!base) return;
@@ -347,8 +455,8 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
     return { label, checked: () => calibration.enabled && input.checked };
   }
 
-  function recordShot(candidate: RaidPlannerCandidate, phase: number, damageYi: number, verified = false): boolean {
-    if (!base || !Number.isFinite(damageYi) || damageYi <= 0) {
+  function recordShot(candidate: RaidPlannerCandidate, phase: number, damageYi: number, verified = false, acknowledged = false): boolean {
+    if (!base || !Number.isFinite(damageYi * YI) || damageYi <= 0) {
       status.textContent = '請選擇實際隊伍並填入大於 0 的傷害。';
       return false;
     }
@@ -362,6 +470,13 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
     }
     const original = findCandidate(base.candidates, candidate.memberId, candidate.bossIndex, candidate.deckIndex)!;
     const predicted = findCandidate(effectiveCandidates(), candidate.memberId, candidate.bossIndex, candidate.deckIndex)!;
+    if (!acknowledged && unusualDamage(damageYi * YI, predicted.damage)) {
+      requestAction(`${candidate.memberName}／${candidate.bossName}：填入 ${yi(damageYi * YI)}，目前預估 ${yi(predicted.damage)}。差距較大，請核對單位為「億」，以及是否為未打滿的尾刀。`,
+        '確認傷害無誤', () => recordShot(candidate, phase, damageYi, verified, true));
+      return false;
+    }
+    const group = calibrationGroupKey(candidate);
+    const revision = calibration.enabled && group ? calibration.revisions?.[group] : undefined;
     const hpBefore = remainingPhases(base.phases, fired)[phase]?.[candidate.bossIndex];
     fired.push({
       memberId: candidate.memberId, memberName: candidate.memberName,
@@ -370,6 +485,7 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
       ...(candidate.deckLabel ? { deckLabel: candidate.deckLabel } : {}),
       squad: candidate.squad, damage: damageYi * YI,
       simulatedDamage: original.damage, predictedDamage: predicted.damage,
+      ...(revision ? { calibrationRevision: revision } : {}),
       calibrationSample: verified ? 'verified' : 'unreviewed',
       finishingShot: phase < 3 && hpBefore !== undefined && damageYi * YI >= hpBefore,
       finishingReviewed: verified,
@@ -613,12 +729,10 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
     row.append(el('span', 'live-shot-remain', `剩 ${yi(remainingAfter)}`));
     const undo = el('button', 'roster-import live-undo', '撤銷此刀');
     undo.type = 'button';
-    undo.addEventListener('click', () => {
-      const index = fired.indexOf(shot);
-      if (index >= 0) fired.splice(index, 1);
-      persist(); resolve();
-    });
-    row.append(undo);
+    undo.addEventListener('click', () => removeShot(shot));
+    const edit = el('button', 'roster-import', '修改傷害'); edit.type = 'button';
+    edit.addEventListener('click', () => editShot(shot));
+    row.append(edit, undo);
     return row;
   }
 
@@ -723,6 +837,15 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
   }
 
   function renderAll(previousKeys: Set<string>): void {
+    history.replaceChildren(el('summary', undefined, `全部出刀紀錄（${fired.length} 刀）`));
+    for (const [index, shot] of fired.entries()) {
+      const row = el('div', 'live-history-row');
+      const edit = el('button', 'roster-import', '修改傷害'); edit.type = 'button';
+      const undo = el('button', 'roster-import', '撤銷此刀'); undo.type = 'button';
+      edit.addEventListener('click', () => editShot(shot)); undo.addEventListener('click', () => removeShot(shot));
+      row.append(el('span', undefined, `${index + 1}. ${shot.memberName}／${PHASE_LABELS[shot.phase]}／${shot.bossName}／${deckTitle(shot)}：${yi(shot.damage)}`), edit, undo);
+      history.append(row);
+    }
     calibrationPanel.render(base ? { base, fired, state: calibration, plan } : undefined);
     renderPhaseStepper();
     renderSummary();
@@ -740,50 +863,44 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
 
   function applyImport(text: string): void {
     try {
-      const parsed = JSON.parse(text) as RaidPlannerInput;
-      if (!Array.isArray(parsed.phases) || !Array.isArray(parsed.candidates) || !parsed.candidates.length) {
-        throw new Error('empty');
-      }
-      base = parsed;
-      fired = [];
-      calibration = freshCalibration();
-      lastPendingKeys = new Set();
-      plan = undefined;
-      persist();
-      importBox.hidden = true;
-      board.hidden = false;
-      importStatus.textContent = '';
-      renderAll(lastPendingKeys);
-      resolve();
-    } catch {
-      importStatus.textContent = '無法讀取這個檔案 — 請確認是聯盟戰分頁「匯出試算結果」存的 JSON。';
+      const next = readLiveImport(JSON.parse(text));
+      if (base) requestAction(`目前已有 ${fired.length} 刀紀錄，將載入 ${next.fired.length} 刀及其校正設定。確認取代盤面？取代前的進度會保留供還原。`, '確認匯入', () => {
+        checkpoint('匯入前'); applySession(next);
+      });
+      else applySession(next);
+    } catch (error) {
+      importStatus.textContent = `無法匯入，現有進度未變更。請使用試算結果或實戰進度備份 JSON。${error instanceof Error ? error.message : ''}`;
     }
+  }
+
+  let fileRead = 0;
+  async function readFile(file: File): Promise<void> {
+    const request = ++fileRead;
+    try { const text = await file.text(); if (request === fileRead) applyImport(text); }
+    catch { if (request === fileRead) importStatus.textContent = '檔案讀取失敗，現有進度未變更，請重新選擇檔案。'; }
   }
 
   fileInput.addEventListener('change', () => {
     const file = fileInput.files?.[0];
-    if (file) void file.text().then(applyImport);
+    if (file) void readFile(file);
+    fileInput.value = '';
   });
   dropZone.addEventListener('dragover', (event) => event.preventDefault());
   dropZone.addEventListener('drop', (event) => {
     event.preventDefault();
     const file = event.dataTransfer?.files?.[0];
-    if (file) void file.text().then(applyImport);
+    if (file) void readFile(file);
   });
   reimportButton.addEventListener('click', () => {
     importBox.hidden = false;
-    board.hidden = true;
     importStatus.textContent = '';
   });
   resetButton.addEventListener('click', () => {
     if (!base) return;
-    fired = [];
-    calibration = freshCalibration();
-    lastPendingKeys = new Set();
-    plan = undefined;
-    persist();
-    renderAll(lastPendingKeys);
-    resolve();
+    requestAction(`將清空 ${fired.length} 刀現場紀錄及校正設定。清空前的進度會保留，可使用「還原上一份進度」取回。`, '確認清空', () => {
+      checkpoint('清空前'); fired = []; calibration = freshCalibration();
+      lastPendingKeys = new Set(); plan = undefined; persist(); resolve();
+    });
   });
 
   restore();

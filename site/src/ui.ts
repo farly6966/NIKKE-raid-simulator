@@ -689,7 +689,7 @@ export function mountCalculator(root: HTMLElement, deps: CalculatorDependencies)
         <div class="live-import" data-live-import>
           <label class="union-drop" data-live-drop>
             <input type="file" accept=".json,application/json" data-live-file hidden>
-            <b>把試算結果 JSON 拖到這裡</b>
+            <b>把試算結果或實戰進度備份 JSON 拖到這裡</b>
             <span>或點一下選擇檔案</span>
           </label>
           <p class="union-status" data-live-import-status></p>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { calibratedCandidates, calibrationGroupKey, calibrationSampleStatus, calibrationTrend, freshCalibration, readCalibration } from './union-raid-calibration';
+import { calibratedCandidates, calibrationEffect, calibrationGroupKey, calibrationSampleStatus, calibrationTrend, freshCalibration, readCalibration, trackCalibration } from './union-raid-calibration';
 import type { FiredShot } from './union-raid-live';
 import type { RaidPlannerCandidate } from './union-raid-planner';
 
@@ -12,6 +12,42 @@ const shots = (ratios: number[]): FiredShot[] => ratios.map((ratio, index) => ({
 const group = calibrationGroupKey(shots([1])[0]!)!;
 
 describe('實戰校正', () => {
+  it('成效只評估同刀型當次係數的後續完整出刀，不回頭套算舊樣本', () => {
+    const training = shots(Array(5).fill(1.1));
+    const later = shots([1.1, 1.1, 1.1]).map(s => ({ ...s, predictedDamage: 110, calibrationRevision: 'current' }));
+    const excluded = [
+      { ...later[0]!, calibrationRevision: 'previous' },
+      { ...later[0]!, calibrationSample: 'overflow' as const },
+      { ...later[0]!, calibrationSample: 'abnormal' as const },
+      { ...later[0]!, calibrationSample: 'unreviewed' as const },
+      { ...later[0]!, squad: ['f', 'g', 'h', 'i', 'j'] },
+      { ...later[0]!, predictedDamage: undefined },
+    ];
+    const effect = calibrationEffect([...training, ...later, ...excluded], group, 'current');
+    expect(effect.count).toBe(3);
+    expect(effect.originalError).toBeCloseTo(10 / 110);
+    expect(effect.calibratedError).toBeCloseTo(0);
+    expect(calibrationEffect(later, group).count).toBe(0);
+  });
+
+  it('至少五筆後續樣本且平均誤差惡化超過一個百分點才提醒撤銷', () => {
+    const later = shots(Array(5).fill(1)).map(s => ({ ...s, predictedDamage: 110, calibrationRevision: 'current' }));
+    expect(calibrationEffect(later, group, 'current')).toMatchObject({ worse: true, count: 5, originalError: 0 });
+    expect(calibrationEffect(later.slice(1), group, 'current').worse).toBe(false);
+    expect(calibrationEffect(later.map(s => ({ ...s, predictedDamage: 100.5 })), group, 'current').worse).toBe(false);
+  });
+
+  it('新係數開始新追蹤，未變更刀型與備份還原保持原追蹤版本', () => {
+    const original = trackCalibration({ enabled: true, factors: { [group]: 1.1 } });
+    expect(original.revisions?.[group]).toBeTruthy();
+    expect(trackCalibration(readCalibration(original)).revisions).toEqual(original.revisions);
+    const same = trackCalibration({ enabled: true, factors: { [group]: 1.1 } }, original);
+    expect(same.revisions).toEqual(original.revisions);
+    const changed = trackCalibration({ enabled: true, factors: { [group]: 1.2 } }, same);
+    expect(changed.revisions?.[group]).not.toBe(original.revisions?.[group]);
+    expect(trackCalibration(freshCalibration(), changed).revisions).toBeUndefined();
+  });
+
   it('相同五人忽略順序及隊名；不同王或不同角色不能湊足五刀', () => {
     const sample = shots(Array(5).fill(1.1));
     sample[0]!.squad.reverse();

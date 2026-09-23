@@ -1,4 +1,4 @@
-import { calibratedCandidates, calibrationGroupKey, calibrationSampleStatus, calibrationTrend, sampleRatio, type CalibrationState } from './union-raid-calibration';
+import { calibratedCandidates, calibrationEffect, calibrationGroupKey, calibrationSampleStatus, calibrationTrend, sampleRatio, type CalibrationState } from './union-raid-calibration';
 import { remainingCandidates, remainingPhases, usedCounts, type FiredShot } from './union-raid-live';
 import type { RaidPlannerInput, RaidPlannerPlan } from './union-raid-planner';
 
@@ -24,6 +24,8 @@ export function mountCalibrationPanel(host: HTMLElement, callbacks: {
   labelOf: (name: string) => string;
   change: (state: CalibrationState, preview?: RaidPlannerPlan) => void;
   samplesChanged: (replan?: boolean) => void;
+  editShot: (shot: FiredShot) => void;
+  removeShot: (shot: FiredShot) => void;
 }) {
   let context: Context | undefined;
   let worker: Worker | undefined;
@@ -106,6 +108,14 @@ export function mountCalibrationPanel(host: HTMLElement, callbacks: {
         : !trend.ready ? '目前未達 5% 偏差提醒門檻。'
         : `${deviation(trend.factor)}。建議係數 ×${trend.factor.toFixed(4)}。`;
       card.append(node('p', description));
+      if (factor !== 1) {
+        const effect = calibrationEffect(fired, key, state.revisions?.[key]);
+        const evaluation = node('p'); evaluation.className = 'live-calibration-effect';
+        evaluation.textContent = effect.count
+          ? `校正成效：後續 ${effect.count} 刀，平均誤差由 ${(effect.originalError * 100).toFixed(2)}% → ${(effect.calibratedError * 100).toFixed(2)}%。${effect.count < 5 ? '後續樣本未滿 5 刀，先觀察。' : effect.worse ? '校正後誤差較大，建議檢查或撤銷此刀型校正。' : effect.calibratedError < effect.originalError ? '目前校正後較接近實際。' : '目前未見明顯改善，繼續觀察。'}`
+          : '校正成效：尚無後續有效出刀；開始追蹤前的紀錄不拿來評分。';
+        card.append(evaluation);
+      }
       if (trend.ready && Math.abs(trend.factor - factor) >= 0.005) {
         const action = button('預覽校正與重排', () => startPreview({ enabled: true, factors: { ...state.factors, [key]: trend.factor } }));
         action.disabled = !plan || !!worker; card.append(action);
@@ -116,7 +126,7 @@ export function mountCalibrationPanel(host: HTMLElement, callbacks: {
       grid.append(card);
     }
     host.append(grid);
-    const note = node('p', '提醒門檻為試行設定：至少八成同方向，且至少八成落在比例中位數正負 3 個百分點內；不是準確度保證。');
+    const note = node('p', '提醒門檻為試行設定：至少八成同方向，且至少八成落在比例中位數正負 3 個百分點內；不是準確度保證。校正成效只計本次係數開始追蹤後、已核對的完整出刀，以實際傷害為分母比較平均絕對百分比誤差。改係數後重新累積，升級前的紀錄不補算。');
     note.className = 'field-note'; host.append(note);
     if (message) { const status = node('p', message); status.setAttribute('role', 'status'); host.append(status); }
     if (worker) host.append(button('取消預覽', () => { cancel(); draw(); }));
@@ -174,9 +184,8 @@ export function mountCalibrationPanel(host: HTMLElement, callbacks: {
       else if (shot.finishingShot) row.append(node('span', calibrationSampleStatus(shot) === 'unreviewed'
         ? '疑似收尾刀：請確認是否正常打滿' : calibrationSampleStatus(shot) === 'verified'
           ? '完整收尾刀：納入分析' : '收尾刀：依異常標記排除'));
-      row.append(button('撤銷此筆出刀', () => {
-        fired.splice(index, 1); callbacks.samplesChanged(true);
-      }));
+      row.append(button('修改傷害', () => callbacks.editShot(shot)),
+        button('撤銷此筆出刀', () => callbacks.removeShot(shot)));
       details.append(row);
     });
     host.append(details);
