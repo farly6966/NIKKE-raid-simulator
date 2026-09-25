@@ -1097,7 +1097,11 @@ export class BuffManager {
     if (timing.startsWith('full_burst_end_count:')) {
       return 'full_burst_end';
     }
-    if (timing.startsWith('full_charge_count:')) {
+    // fork 將蓄力「開火」與「命中」分成兩種事件；舊稱 full_charge_count 屬於開火。
+    if (timing.startsWith('full_charge_fire_count:') || timing.startsWith('full_charge_count:')) {
+      return 'full_charge_fire';
+    }
+    if (timing.startsWith('full_charge_hit_count:')) {
       return 'full_charge_hit';
     }
     if (timing.startsWith('on_attack_count:')) {
@@ -2218,6 +2222,15 @@ export class BuffManager {
     return pmax(1, n - int(reduce));
   }
 
+  // 依技能等級代入觸發次數；透芙的愛藏品技能使用 on_attack_count:{0}。
+  _resolve_count_placeholder(raw: string, eff: Eff, caster: string): string {
+    if (!(raw.startsWith('{') && raw.endsWith('}'))) return raw;
+    const tv = get(eff, 'trigger_values', {});
+    if (!truthy(tv)) return raw;
+    const char = get(this._char, caster, {});
+    return pystr(get(tv, _get_skill_lv(char, eff), get(tv, '10', raw)));
+  }
+
   // py: calculator/buff_manager.py:1723
   /** timing 문자열과 현재 이벤트가 매칭되는지 확인. */
   _timing_match(timing: string, event: string, count: number, t: number, eff: Eff, caster: string = ''): boolean {
@@ -2243,7 +2256,7 @@ export class BuffManager {
 
     // on_attack_count:N — `일반 공격 N회 공격 시`. 발사 1회당 1씩 오른다.
     if (timing.startsWith('on_attack_count:') && event === 'on_attack') {
-      const raw = timing.split(':')[1]!;
+      const raw = this._resolve_count_placeholder(timing.split(':')[1]!, eff, caster);
       if (!isdigit(lstripDash(raw))) return false;
       const n = this._apply_trigger_count_reduce(int(raw), eff, caster, t);
       return n > 0 && pymod(count, n) === 0;
@@ -2313,13 +2326,15 @@ export class BuffManager {
       return count >= int(raw);
     }
 
-    // full_charge_count:N  (trigger_count_reduce 버프로 N 감소 가능)
-    if (timing.startsWith('full_charge_count:') && event === 'full_charge_hit') {
-      const raw = timing.split(':')[1]!;
+    // 蓄力開火／命中累計觸發；兩者不能混算，次數門檻仍受 trigger_count_reduce 影響。
+    const chargeEvent = timing.startsWith('full_charge_fire_count:') || timing.startsWith('full_charge_count:')
+      ? 'full_charge_fire' : timing.startsWith('full_charge_hit_count:') ? 'full_charge_hit' : null;
+    if (chargeEvent === event) {
+      const raw = this._resolve_count_placeholder(timing.split(':')[1]!, eff, caster);
       if (!isdigit(lstripDash(raw))) return false;
       let n = int(raw);
       n = this._apply_trigger_count_reduce(n, eff, caster, t);
-      return pymod(count, n) === 0;
+      return n > 0 && pymod(count, n) === 0;
     }
 
     // hit_count:[스킬명]:N — named damage effect 명중 N회마다

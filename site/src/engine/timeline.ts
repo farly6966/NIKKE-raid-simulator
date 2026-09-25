@@ -2585,14 +2585,15 @@ export class BurstController {
     // ── 전환 딜레이 → 풀버스트 진입 ───────────────────────────────────
     if (this._phase === 'switching' && t >= this._next_action_t - 1e-9) {
       this._phase = 'full_burst';
-      // fullburst_duration 버프(초) 합산. caster당 1회만 집계한다.
-      const seen_casters = new Set<string>();
+      // 同一效果對全隊只計一次；同一施放者的不同效果仍須分開累加。
+      const seen_effects = new Set<string>();
       let fb_ext = 0.0;
       for (const ab of bm._active) {
         if (abStat(ab, null) !== 'fullburst_duration') {
           continue;
         }
-        if (seen_casters.has(ab.caster)) {
+        const key = JSON.stringify([ab.caster, get(ab.effect, 'source'), get(ab.effect, 'name')]);
+        if (seen_effects.has(key)) {
           continue;
         }
         // burst_cast 타이밍으로 등록된 fullburst_duration은 3단계 발동자일 때만 반영
@@ -2607,7 +2608,7 @@ export class BurstController {
           val = float(get(vals, lv, get(vals, '10', 0.0)));
         }
         fb_ext += float(val);
-        seen_casters.add(ab.caster);
+        seen_effects.add(key);
       }
       this._full_burst_end_t = t + _pymax(1.0, 10.0 + fb_ext);
       state['full_burst'] = true;
@@ -3351,10 +3352,8 @@ export function simulate(
 
   squad = squad.map((c) => ({ ...DEFAULT_CHAR, ...c }));
   _check_names(squad.map((c) => item(c, 'name')), truthy(item(cfg, 'allow_unparsed')));
-  // 편성 자리와 무관한 결과(2026-09-23). 처리 순서는 이름순, 실제 자리는 자리를 보는 스킬만 쓴다.
-  // py: calculator/timeline.py — slot_order / sorted(squad, key=name)
+  // fork 的技能與同數值目標選擇依原編隊順序處理；排序會改變並列攻擊力的受益者。
   const slot_order: string[] = squad.map((c) => item(c, 'name') as string);
-  squad = sorted(squad, (c: Dict) => item(c, 'name') as string);
 
   if (!(cfg['burst_gauge_mode'] === 'fixed' || cfg['burst_gauge_mode'] === 'accumulate')) {
     throw ValueError(
