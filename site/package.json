@@ -8,6 +8,8 @@
     "dev": "vite",
     "pretest": "npm run sync-runtime",
     "test": "vitest",
+    "parity:engine": "tsx scripts/engine-parity.ts",
+    "parity:evidence": "tsx scripts/replay-evidence.ts",
     "sync-runtime": "node scripts/sync-runtime.mjs",
     "check-runtime": "node scripts/check-runtime.mjs",
     "check-pages": "node scripts/check-pages.mjs",
@@ -18,6 +20,7 @@
   "devDependencies": {
     "@types/node": "^26.2.0",
     "jsdom": "^29.1.1",
+    "tsx": "^4.23.15",
     "typescript": "7.0.2",
     "vite": "8.2.1",
     "vitest": "4.1.10",
