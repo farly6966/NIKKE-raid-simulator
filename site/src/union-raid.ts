@@ -24,6 +24,7 @@ import type { BurstSequence } from './burst-order';
 import { cleanUnionSequence, createUnionBurstEditor, cleanNoBurst, applyUnionBurst } from './union-burst';
 import { bestThreeShots } from './union-planning';
 import { plannerCandidates, type RaidPlannerInput, type RaidPlannerPlan } from './union-raid-planner';
+import { engineEvidence } from './engine-evidence';
 import { createBattleAnalysis } from './battle-analysis';
 import { ownedSSR, searchSquads } from './union-search';
 import { DEFAULT_SYNCHRO_LEVEL, SYNCHRO_MAX, SYNCHRO_MEASURED_MAX } from './model';
@@ -2704,8 +2705,10 @@ export function mountUnionRaid(hosts: UnionHosts, deps: UnionDeps): UnionHandle 
     const stop = el('button', 'roster-import', '停止排刀'); stop.type = 'button'; stop.hidden = true;
     const exportResults = el('button', 'roster-import', '匯出試算結果'); exportResults.type = 'button';
     exportResults.title = '存成 JSON 檔，供「實戰推演」分頁匯入，現場邊打邊重算用。';
+    const exportEvidence = el('button', 'roster-import', '匯出引擎驗證資料'); exportEvidence.type = 'button';
+    exportEvidence.title = '保存每盤完整計算輸入與傷害，以便比對新舊引擎。檔案含角色育成資料，請勿公開分享。';
     const status = el('span', 'union-status'); status.setAttribute('aria-live', 'polite');
-    actions.append(solve, stop, exportResults, status); card.append(actions);
+    actions.append(solve, stop, exportResults, exportEvidence, status); card.append(actions);
     stop.addEventListener('click', () => {
       raidPlannerWorker?.terminate(); raidPlannerWorker = undefined;
       stop.hidden = true; solve.disabled = false; status.textContent = '已停止排刀。';
@@ -2718,6 +2721,15 @@ export function mountUnionRaid(hosts: UnionHosts, deps: UnionDeps): UnionHandle 
       const link = document.createElement('a'); link.href = url;
       link.download = `聯盟戰試算結果_${new Date().toISOString().slice(0, 10)}.json`; link.click();
       setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    });
+    exportEvidence.addEventListener('click', () => {
+      const evidence = engineEvidence(results);
+      if (!evidence.cases.length) { status.textContent = '沒有可供驗證的五人模擬結果。'; return; }
+      const url = URL.createObjectURL(new Blob([JSON.stringify(evidence)], { type: 'application/json' }));
+      const link = document.createElement('a'); link.href = url;
+      link.download = `聯盟戰引擎驗證_${new Date().toISOString().slice(0, 10)}.json`; link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      status.textContent = `已匯出 ${evidence.cases.length} 盤；檔案含角色育成資料，請妥善保管。`;
     });
     solve.addEventListener('click', () => {
       if (raidPlannerWorker) return;
