@@ -99,4 +99,36 @@ describe('fork TS 引擎相容邊界', () => {
     expect(shots.slice(0, 4).map(hit => Math.round(hit.t * 1000) / 1000))
       .toEqual([1, 2.4, 14.2, 15.583]);
   });
+
+  it('武器模式結束後回復原武器實效滿彈，避免插入額外裝填', () => {
+    const squad = build_squad(['츠바이', '나유타', '프리바티', '스노우 화이트 : 헤비암즈', '리틀 머메이드']);
+    const config = build_config(squad, { duration: 16, first_burst_time: 3, no_burst_char: '리틀 머메이드' });
+    const result = simulate(squad, config, null, true, 42);
+    const restored = result.log?.ammo_log.find(entry => entry.caster === '츠바이'
+      && Math.abs(entry.t - (4 + 17 / 60)) < 0.001);
+    expect(restored?.ammo).toBe(15);
+    const reloads = result.log?.reload_log.filter(entry => entry.caster === '츠바이');
+    expect(reloads?.[0]?.t).toBeCloseTo(14.95, 2);
+  });
+
+  it('CDN 回掩體武器於開火後搖自動裝填', () => {
+    const squad = build_squad(['트리나', '홍련', '아니스 : 스파클링 서머', '프리바티', '목단']);
+    const config = build_config(squad, { duration: 20, first_burst_time: 3 });
+    const result = simulate(squad, config, { code: '수냉', core_px: 52 }, true, 42);
+    const reloads = result.log?.reload_log.filter(entry => entry.caster === '트리나');
+    expect(reloads?.[0]?.event).toBe('자동 재장전(엄폐)');
+    expect(reloads?.[0]?.t).toBeCloseTo(4 + 11 / 60, 2);
+  });
+
+  it('扣除彈藥最低停在零，分段裝填受裝填比例技能影響', () => {
+    const squad = build_squad(['리타', '그레이브', '레이', '앨리스', '모더니아']);
+    const config = build_config(squad, { duration: 35, first_burst_time: 3 });
+    const result = simulate(squad, config, { code: '풍압' }, true, 42);
+    const ammo = result.log?.ammo_log.filter(entry => entry.caster === '그레이브') ?? [];
+    expect(Math.min(...ammo.map(entry => entry.ammo))).toBe(0);
+    expect(ammo.find(entry => Math.abs(entry.t - (30 + 53 / 60)) < 0.001)?.ammo).toBe(0);
+    const complete = result.log?.reload_log.find(entry => entry.caster === '그레이브'
+      && entry.event === '재장전 완료' && entry.t > 30);
+    expect(complete?.t).toBeCloseTo(33 + 48 / 60, 2);
+  });
 });

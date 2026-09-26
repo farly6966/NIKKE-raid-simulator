@@ -367,6 +367,8 @@ export const _BUFFS_ZERO: Record<string, any> = {
   'accuracy_pct': 0.0,
   'normal_atk_dmg_pct': 0.0,
   'reload_speed_pct': 0.0,
+  // 每次分段裝填的彈藥比例，與裝填速度分開計算。
+  'reload_ratio_pct': 0.0,
   'burst_cooldown': 0.0,  // 버스트 쿨타임 감소 (buff 상태로 지속)
   'max_hp_pct': 0.0,  // 최대 체력 + 현재 체력 동반 증가
   'max_hp_only_pct': 0.0,  // 최대 체력만 증가 (현재 체력 유지)
@@ -439,6 +441,7 @@ export const _STAT_TO_BUFF: Record<string, string> = {
   'accuracy_pct': 'accuracy_pct',
   'normal_atk_dmg_pct': 'normal_atk_dmg_pct',
   'reload_speed_pct': 'reload_speed_pct',
+  'reload_ratio_pct': 'reload_ratio_pct',
   'burst_cooldown': 'burst_cooldown',
   'max_hp_pct': 'max_hp_pct',
   'max_hp_only_pct': 'max_hp_only_pct',

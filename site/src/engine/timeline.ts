@@ -480,6 +480,7 @@ export class CharState {
   shotgun_stats!: Dict;
   _shotgun_heatmap!: ShotgunHeatmap | null;
   _wc_ammo_borrowed!: boolean;
+  _wc_ammo_restored!: boolean;
   _wc_refill_on_exit!: boolean;
   weapon_mode_swap!: boolean;
   weapon_mode_swap_at!: number;
@@ -568,7 +569,8 @@ export class CharState {
     this.reload_start_delay = get(
       _delay_exc, 'reload_start_delay', get(_delay_wt, 'reload_start_delay', 0.0));
     // 엄폐 니케: 재장 ≥100%일 때 post_fire_delay 중 자동재장전 (장탄 유지)
-    this.cover_during_delay = get(_delay_exc, 'cover_during_delay', false);
+    // 自動回掩體由武器 CDN 欄位推得，角色例外設定優先。
+    this.cover_during_delay = _pick('cover_during_delay', [_delay_exc, weapon_data], false);
     this._pending_auto_reload = false;
 
     // 발사 메카닉 3계층 해석 (_pick 참조).
@@ -641,6 +643,7 @@ export class CharState {
     this._shotgun_heatmap = null;
     // 연사 무기 모드는 진입 시 self.ammo를 모드 장탄으로 덮어쓴다(원래 장탄은 버린다).
     this._wc_ammo_borrowed = false;
+    this._wc_ammo_restored = false;
     this._wc_refill_on_exit = false;
 
     // 모드 지정 플래그: 수동 재장전으로 진입하는 weapon_change 모드를 쓰는가.
@@ -756,6 +759,7 @@ export class CharState {
         this._in_weapon_change = true;
         this._wc_shots = 0;
         this._wc_new_session = true;
+        this._wc_ammo_restored = false;
         this._wc_refill_on_exit = truthy(get(wc_eff, 'refill_on_exit'));
       }
       // 자기 탄창을 관리하는 모드(지속형 + 유한 장탄)만 모드 안에서 재장전을 완료시킨다.
@@ -781,14 +785,16 @@ export class CharState {
       this._charge_full_t = -1.0;
       this._hold_release_t = -1.0;
       (bm.state['charging'] ??= {})[this.name] = false;
-      if (this._wc_refill_on_exit) {
-        this._restore_special_magazine(t, bm);
-      }
-      if (this._wc_ammo_borrowed) {
-        // 모드 종료 = 재장전 완료 상태로 본다 (유저 확인). 모더니아 `섬멸 모드`.
+      // 模式到期時原武器回到滿彈；按發數結束的模式已在開火當幀復歸，不能再蓋掉結束效果。
+      if (!this._wc_ammo_restored) {
         this.ammo = this._full_ammo(bm, t);
-        this._wc_ammo_borrowed = false;
+        if (this.reloading_until > 0 && this._reload_in_weapon_change) {
+          this.reloading_until = -1.0;
+          this._reload_in_weapon_change = false;
+        }
       }
+      this._wc_ammo_borrowed = false;
+      this._wc_ammo_restored = false;
     }
 
     // 최대 장탄 증가 버프가 만료되면 초과 잔탄은 잘린다.
@@ -1810,20 +1816,13 @@ export class CharState {
       }
     }
     if (duration_bullets != null && this._wc_shots >= duration_bullets) {
-      // 원래 무기로 돌아오면 charge_phase를 ready로 초기화
-      if (!truthy(get(wc_eff, 'refill_on_exit'))) {
-        this._charge_phase = 'ready';
-      }
-      if (wc_fire_mode === 'auto' || wc_fire_mode === 'auto_warmup') {
-        // 마지막 발과 같은 tick에 잡힌 변경 무기 재장전 예약은 무효
-        this.reloading_until = -1.0;
-        this.next_fire_time = t;
-      }
-      this.ammo = orig_ammo !== null ? orig_ammo : item(this.weapon, 'max_ammo');
-      if (truthy(get(wc_eff, 'refill_on_exit'))) {
-        this._restore_special_magazine(t, bm);
-      }
-      this._wc_ammo_borrowed = false; // 여기서 이미 원복했다 (tick의 만료 처리와 중복 금지)
+      this._charge_phase = 'ready';
+      // 模式最後一發預約的裝填不應帶回原武器；以原武器實效彈匣回復滿彈。
+      this.reloading_until = -1.0;
+      this.next_fire_time = t;
+      this.ammo = this._full_ammo(bm, t, true);
+      this._wc_ammo_borrowed = false;
+      this._wc_ammo_restored = true;
       this._wc_dynamic_ammo = null;
       // 장탄 원복이 끝난 뒤에 종료 이벤트를 쏜다.
       bm.end_weapon_change(this.name, t);
@@ -3076,7 +3075,8 @@ export function _register_instant_handlers(bm: BM, char_states: Record<string, C
       }
       const max_ammo = _effective_max_ammo(cs, t);
       const charge = round(max_ammo * (val / 100.0));
-      cs.ammo = _pymin(cs.ammo + charge, max_ammo);
+      // 扣除最大彈匣百分比時，剩餘彈藥最低為零。
+      cs.ammo = _pymax(0, _pymin(cs.ammo + charge, max_ammo));
       if (cs._sim_log !== null) {
         cs._sim_log.ammo_log.push(new AmmoLogEntry({ t, caster: name, ammo: cs.ammo }));
       }

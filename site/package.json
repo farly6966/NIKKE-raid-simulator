@@ -9,6 +9,7 @@
     "pretest": "npm run sync-runtime",
     "test": "vitest",
     "parity:engine": "tsx scripts/engine-parity.ts",
+    "parity:expected": "tsx scripts/engine-expected-parity.ts",
     "parity:boss-phases": "tsx scripts/boss-phase-parity.ts",
     "parity:evidence": "tsx scripts/replay-evidence.ts",
     "sync-runtime": "node scripts/sync-runtime.mjs",
