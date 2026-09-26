@@ -26,7 +26,12 @@ const rows = Object.entries(squads).filter(([name]) => !only || name === only).m
     const config = build_config(squad, info.config ?? null);
     const result = simulate(squad, config, info.enemy ?? null, true, info.seed);
     const hitCounts: Record<string, number> = {};
+    const hitTags: Record<string, Record<string, number>> = {};
     for (const hit of result.hits) hitCounts[hit.caster] = (hitCounts[hit.caster] ?? 0) + 1;
+    for (const hit of result.hits) {
+      const tags = hitTags[hit.caster] ??= {};
+      tags[hit.hit_tag] = (tags[hit.hit_tag] ?? 0) + 1;
+    }
     const skillTotals: Record<string, Record<string, { damage: number; hits: number }>> = {};
     for (const hit of result.hits) {
       const skills = skillTotals[hit.caster] ??= {};
@@ -49,6 +54,11 @@ const rows = Object.entries(squads).filter(([name]) => !only || name === only).m
       actualCharacters: result.char_total,
       expectedHits: Object.fromEntries(Object.entries(baseline.L1_numbers.per_char).map(([char, row]) => [char, (row as any).hits])),
       actualHits: hitCounts,
+      expectedHitTags: Object.fromEntries(Object.entries(baseline.L1_numbers.per_char).map(([char, row]) => [char, (row as any).hit_tags])),
+      actualHitTags: hitTags,
+      fullChargeTimes: result.hits.filter(hit => hit.hit_tag === 'full_charge_hit')
+        .reduce((out, hit) => { (out[hit.caster] ??= []).push(hit.t); return out; }, {} as Record<string, number[]>),
+      reloadEvents: result.log?.reload_log.map(entry => [entry.t, entry.caster, entry.event]),
       expectedSkills: Object.fromEntries(Object.entries(baseline.L1_numbers.per_char).map(([char, row]) => [char, (row as any).skills])),
       actualSkills: skillTotals,
       expectedBuffs: Object.fromEntries(Object.entries(baseline.L2_activations.buffs).map(([key, row]) => [key, (row as any).count])),

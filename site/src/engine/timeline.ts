@@ -15,6 +15,7 @@
  */
 
 import { calc_base_stats } from './base_stat';
+import { UnionBossPhases } from './union_boss_phases';
 import { BuffManager, BURST_GAUGE_EXCEPTIONS, _QUANT_PARTS_KEY, _get_skill_lv, abStat } from './buff_manager';
 import { from_config as cheats_from_config } from './cheats';
 import { normalize_optimal_range_windows } from './customization';
@@ -455,12 +456,15 @@ export class CharState {
   burst_energy!: number;
   charge_time_base!: number;
   post_fire_delay!: number;
+  _min_fire_cycle!: number;
+  _last_fire_t!: number;
   _charge_phase!: string;
   _charge_start_t!: number;
   _charge_end_t!: number;
   _post_delay_end_t!: number;
   pellets!: number;
   is_clip!: boolean;
+  clip_ratio_pct!: number;
   _in_weapon_change!: boolean;
   _reload_in_weapon_change!: boolean;
   _wc_shots!: number;
@@ -595,11 +599,16 @@ export class CharState {
       } else {
         this.charge_time_base = item(weapon_data, 'charge_time');
       }
-      this.post_fire_delay = get(_delay_exc, 'post_fire_delay', get(_delay_wt, 'post_fire_delay', get(mech, 'post_fire_delay', 0.0)));
+      // fork 的 CDN 武器數值位於延遲覆寫與武器種類預設之間（渡鴉為 1.05 秒）。
+      this.post_fire_delay = float(_pick('post_fire_delay', [_delay_exc, weapon_data, _delay_wt, mech], 0.0));
     } else {
       this.charge_time_base = 0.0;
       this.post_fire_delay = 0.0;
     }
+    // DOWN_Charge 的 CDN 射速是兩次開火的最短間隔；後搖為零時仍須限制射速。
+    this._min_fire_cycle = get(weapon_data, 'input_type') === 'DOWN_Charge' && truthy(get(weapon_data, 'fire_rate'))
+      ? 1.0 / float(get(weapon_data, 'fire_rate')) : 0.0;
+    this._last_fire_t = -1.0;
     this._charge_phase = 'ready';
     this._charge_start_t = 0.0;
     this._charge_end_t = 0.0;
@@ -608,9 +617,9 @@ export class CharState {
     // SG (계수를 나누는 단위. 히트 수는 self.muzzles를 곱한 값)
     this.pellets = int(_pick('pellets', [_delay_exc, weapon_data, mech], 1));
 
-    // 클립 무기 여부 (일부 SG/RL). 처리는 _finish_reload()·_reload_total_duration().
-    const _clip_chars = get(get(_MECHANICS(), 'clip_characters', {}), this.weapon_type, []);
-    this.is_clip = _in(this.name, _clip_chars);
+    // 以 CDN 武器資料決定分段裝填比例，包含原角色清單漏掉的葛雷夫。
+    this.clip_ratio_pct = float(get(weapon_data, 'clip_ratio_pct', 0.0) || 0.0);
+    this.is_clip = 0.0 < this.clip_ratio_pct && this.clip_ratio_pct < 100.0;
 
     this._in_weapon_change = false;
     // 이 재장전이 무기 변경 모드 안에서 시작됐는가 (모드 탄창 vs 원래 무기 탄창)
@@ -767,6 +776,11 @@ export class CharState {
       this._in_weapon_change = false;
       this._wc_dynamic_ammo = null;
       this.next_fire_time = t;
+      // 限時變身結束時，原武器須重新蓄力；保留舊相位會立刻射出免費滿蓄力一發。
+      if (this.fire_mode === 'charge') this._charge_phase = 'ready';
+      this._charge_full_t = -1.0;
+      this._hold_release_t = -1.0;
+      (bm.state['charging'] ??= {})[this.name] = false;
       if (this._wc_refill_on_exit) {
         this._restore_special_magazine(t, bm);
       }
@@ -1043,6 +1057,7 @@ export class CharState {
       events.push(new HitEvent({
         t, caster: this.name, damage: shot_damage,
         is_crit: res['is_crit'], hit_tag: tag,
+        is_pierce: truthy(get(ht, 'is_pierce_damage')),
         core_frac: core_frac,
         ...(this._wc_is_skill_damage() ? { skill_name: this._wc_name } : {}),
       }));
@@ -1274,6 +1289,11 @@ export class CharState {
           return events;
         }
       }
+      if (this._min_fire_cycle > 0.0 && this._last_fire_t >= 0.0
+          && t < this._last_fire_t + this._min_fire_cycle - 1e-9) {
+        return events;
+      }
+      this._last_fire_t = t;
       events.push(...this._charge_fire(t, bm, enemy, cfg, is_full));
     } else if (this._charge_phase === 'post_delay' && t >= this._post_delay_end_t) {
       if (this._pending_auto_reload) {
@@ -1471,6 +1491,7 @@ export class CharState {
       events.push(new HitEvent({
         t, caster: this.name, damage: shot_damage,
         is_crit: res['is_crit'], hit_tag: tag,
+        is_pierce: truthy(get(ht, 'is_pierce_damage')),
         // 코어를 맞은 몫 (`_fire`와 같은 값·같은 취지).
         core_frac: (expected ? P_core : (is_core ? 1.0 : 0.0)),
         ...(this._wc_is_skill_damage() ? { skill_name: this._wc_name } : {}),
@@ -2151,15 +2172,21 @@ export class CharState {
   }
 
   // py: calculator/timeline.py:1901
+  _effective_clip_ratio(bm: BM): number {
+    const base = this.clip_ratio_pct || 100.0;
+    const mod = get(bm.get_buffs(this.name, '__enemy__', bm._cur_t), 'reload_ratio_pct', 0.0);
+    return _pymax(1.0, base * (1.0 + mod / 100.0));
+  }
+
   _is_clip_reload(bm: BM): boolean {
-    // 지금 굴러가는 재장전이 클립 장전인가.
-    return this.is_clip && bm.get_weapon_change(this.name) == null;
+    if (bm.get_weapon_change(this.name) != null) return false;
+    return this._effective_clip_ratio(bm) < 100.0 - 1e-9;
   }
 
   // py: calculator/timeline.py:1908
-  _clip_gain(full: number): number {
-    // 클립 1회가 채우는 발수 = **현재** 최대 장탄의 1/3을 **반올림**한 값.
-    return _pymax(1, Math.floor(full / 3 + 0.5));
+  _clip_gain(full: number, bm: BM): number {
+    // 每次裝填量依目前最大彈匣與實際裝填比例四捨五入。
+    return _pymax(1, Math.floor(full * this._effective_clip_ratio(bm) / 100.0 + 0.5));
   }
 
   // py: calculator/timeline.py:1918
@@ -2170,7 +2197,7 @@ export class CharState {
       return one;
     }
     const full = this._full_ammo(bm, t);
-    const clips = Math.ceil(_pymax(0, full - this.ammo) / this._clip_gain(full));
+    const clips = Math.ceil(_pymax(0, full - this.ammo) / this._clip_gain(full, bm));
     return one * _pymax(1, clips);
   }
 
@@ -2254,7 +2281,7 @@ export class CharState {
     const full = this._full_ammo(bm, t);
     this._note_max_ammo(t, full);
     if (this._is_clip_reload(bm)) {
-      this.ammo = _pymin(full, this.ammo + this._clip_gain(full));
+      this.ammo = _pymin(full, this.ammo + this._clip_gain(full, bm));
       if (this.ammo < full) {
         if (this._sim_log !== null) {
           this._sim_log.ammo_log.push(new AmmoLogEntry({ t, caster: this.name, ammo: this.ammo }));
@@ -2331,6 +2358,7 @@ export class BurstController {
   _burst_count: number;
   _no_burst_char: string | null;
   _no_burst_names: Set<string>;
+  _strict_no_burst: boolean;
   _burst_pattern: Dict;
   _sim_duration: number;
   _burst_reaction: number;
@@ -2388,6 +2416,7 @@ export class BurstController {
     this._no_burst_char = get(config, 'no_burst_char', null);
     // 버스트를 아예 안 쓰는 캐릭터들. **후보에서 통째로 빠진다**.
     this._no_burst_names = new Set(or(get(config, 'no_burst_chars'), []) as string[]);
+    this._strict_no_burst = get(config, 'strict_no_burst') === true;
 
     // 캐릭터별 버스트 사용 패턴 — {이름: "every:3" | [1, 3, 5, ...]}.
     this._burst_pattern = or(get(config, 'burst_pattern'), {});
@@ -2727,11 +2756,16 @@ export class BurstController {
   // py: calculator/timeline.py:2439
   _predict_candidates(stage: string, cycle_idx: number): string[] {
     // 예측용 단계 후보. `_try_use_stage()`가 쓰는 것과 같은 출처.
+    let cands: string[];
     if (this._burst_sequence != null
         && cycle_idx < this._burst_sequence.length) {
-      return get(this._burst_sequence[cycle_idx]!, stage, []);
+      cands = get(this._burst_sequence[cycle_idx]!, stage, []);
+    } else {
+      cands = get(this.burst_order, stage, []);
     }
-    return get(this.burst_order, stage, []);
+    return this._strict_no_burst
+      ? cands.filter(name => name !== this._no_burst_char && !this._no_burst_names.has(name))
+      : cands;
   }
 
   // py: calculator/timeline.py:2450
@@ -2789,6 +2823,10 @@ export class BurstController {
           candidates = due;
         }
       }
+    }
+    // 嚴格禁爆會從候選中移除指定角色，包含明確輪次和自動備援。
+    if (this._strict_no_burst) {
+      candidates = candidates.filter(name => name !== this._no_burst_char && !this._no_burst_names.has(name));
     }
     // 쿨 대기 플래그는 매번 새로 판정한다 (아래 대기 분기에서만 다시 세운다)
     this._cd_wait_candidates = null;
@@ -3298,6 +3336,7 @@ export function simulate(
 
   const cfg: Dict = { ...DEFAULT_CONFIG, ...or(config, {}) };
   const enm: Dict = { ...DEFAULT_ENEMY, ...or(enemy, {}) };
+  const unionBossPhases = get(enm, 'boss_phases') != null ? new UnionBossPhases(enm['boss_phases'], enm) : null;
   const core_px = item(enm, 'core_px');
   const core_windows: Array<[number, number]> = (or(get(enm, 'core_windows'), []) as any[]).map(
     ([a, b]: any[]) => [float(a), float(b)] as [number, number]);
@@ -3691,6 +3730,7 @@ export function simulate(
       _dot_events.push(new HitEvent({
         t, caster, damage: res['damage'],
         is_crit: res['is_crit'], hit_tag: hit_tag,
+        is_pierce: truthy(get(ht, 'is_pierce_damage')),
         skill_name: get(eff, 'name', stat),
       }));
       // hit_count:[스킬명] 이벤트 — named damage effect 명중마다 발생.
@@ -3792,7 +3832,8 @@ export function simulate(
 
   // 파츠 파괴 주기 (config["part_break_interval"], 초). 0/미지정이면 무발동.
   const _part_break_interval = float(or(get(cfg, 'part_break_interval', 0), 0));
-  let _next_part_break = _part_break_interval > 0 ? _part_break_interval : Infinity;
+  let _next_part_break = _part_break_interval > 0 && !unionBossPhases?.hasPartWindows
+    ? _part_break_interval : Infinity;
 
   // ── 보스 페이즈 관문 (족자 · 속저) ────────────────────────────────────
   const _immune_windows: Array<[number, number]> = (or(get(enm, 'immune_windows'), []) as any[]).map(
@@ -3810,6 +3851,8 @@ export function simulate(
     return (truthy(is_element_match(get(_roster_code, name, ''), code))
       || truthy(bm.element_override_match(name, code)));
   }
+
+  const _phase_admit = (ev: HitEvent): boolean => unionBossPhases?.admits(ev, _beats) ?? true;
 
   // py: calculator/timeline.py:3411
   function _gate(events: HitEvent[], t: number): HitEvent[] {
@@ -3830,10 +3873,16 @@ export function simulate(
   while (t <= duration) {
     _update_optimal_range(t);
     _update_core_exposure(t);
+    const endedParts = unionBossPhases?.beginFrame(t, enm) ?? 0;
     bm.tick(t);
     _sync_damage_accumulators(t);
 
+    for (let i = 0; i < endedParts; i++) {
+      for (const char of squad) bm.notify('event:part_destroy', t, item(char, 'name'));
+    }
+
     for (const ev of _gate(_release_damage_accumulators(t), t)) {
+      if (!_phase_admit(ev)) continue;
       result.hits.push(ev);
       result.char_total[ev.caster] = item(result.char_total, ev.caster) + ev.damage;
       _apply_lifesteal(ev, bm, base_stats, t);
@@ -3851,6 +3900,7 @@ export function simulate(
     const _gated_dots = _gate(_dot_events, t);
     _accumulate_damage(_gated_dots, t);
     for (const ev of _gated_dots) {
+      if (!_phase_admit(ev)) continue;
       result.hits.push(ev);
       result.char_total[ev.caster] = item(result.char_total, ev.caster) + ev.damage;
       _apply_lifesteal(ev, bm, base_stats, t);
@@ -3861,6 +3911,7 @@ export function simulate(
     burst_events = _gate(burst_events, t);
     _accumulate_damage(burst_events, t);
     for (const ev of burst_events) {
+      if (!_phase_admit(ev)) continue;
       result.hits.push(ev);
       result.char_total[ev.caster] = item(result.char_total, ev.caster) + ev.damage;
       _apply_lifesteal(ev, bm, base_stats, t);
@@ -3871,6 +3922,7 @@ export function simulate(
       const char_events = _gate(char_states[name]!.tick(t, bm, enm, cfg), t);
       _accumulate_damage(char_events, t);
       for (const ev of char_events) {
+        if (!_phase_admit(ev)) continue;
         result.hits.push(ev);
         result.char_total[name] = item(result.char_total, name) + ev.damage;
         _apply_lifesteal(ev, bm, base_stats, t);
@@ -3888,6 +3940,7 @@ export function simulate(
     }
     _accumulate_damage(_dot_events, t);
     for (const ev of _dot_events) {
+      if (!_phase_admit(ev)) continue;
       result.hits.push(ev);
       result.char_total[ev.caster] = item(result.char_total, ev.caster) + ev.damage;
       _apply_lifesteal(ev, bm, base_stats, t);

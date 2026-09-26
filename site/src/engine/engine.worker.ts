@@ -1,10 +1,10 @@
 /**
  * 待移植的 TS 計算 worker，沿用 fork 的 prepare／simulate／combatPower 訊息格式。
- * 目前未接到正式畫面；缺少的聯盟戰規則會明確報錯。
+ * 目前未接到正式畫面；須先通過完整跨引擎數值驗證。
  */
 import { ENGINE_DATA_FILES, setEngineData } from './data';
 import { run_combat_power, run_request } from './bridge';
-import type { SimulationRequest, WorkerRequest } from '../types';
+import type { WorkerRequest } from '../types';
 
 const siteBase = new URL(import.meta.env.BASE_URL, self.location.href);
 let ready: Promise<string> | null = null;
@@ -46,12 +46,6 @@ async function handle(message: WorkerRequest): Promise<void> {
     }
     if (type !== 'simulate' || !payload) {
       throw new Error('고속 엔진이 지원하지 않는 계산 요청입니다.');
-    }
-    // fork 專用王區間與禁爆規則尚未移植；阻止靜默產生錯誤傷害。
-    const request = payload as SimulationRequest;
-    if ((request.bossPhases != null && (!Array.isArray(request.bossPhases) || request.bossPhases.length > 0))
-      || request.strictNoBurst) {
-      throw new Error('快速引擎尚未支援此聯盟戰設定。');
     }
     const result = JSON.parse(run_request(JSON.stringify(payload)));
     post(id, 'result', result);

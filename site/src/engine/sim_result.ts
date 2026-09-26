@@ -87,6 +87,7 @@ export interface HitEventInit {
   hit_tag: string;
   skill_name?: string;
   core_frac?: number | null;
+  is_pierce?: boolean;
 }
 
 // py: calculator/sim_result.py:61
@@ -100,6 +101,7 @@ export class HitEvent {
   skill_name: string; // 스킬명 (일반공격은 "기본 공격")
   // 이 히트가 코어를 맞은 몫(0~1). **사격에서 나온 히트에만** 값이 있고, 그 외는 None.
   core_frac: number | null;
+  is_pierce: boolean;
 
   constructor(kw: HitEventInit) {
     this.t = kw.t;
@@ -109,6 +111,7 @@ export class HitEvent {
     this.hit_tag = kw.hit_tag;
     this.skill_name = kw.skill_name !== undefined ? kw.skill_name : '기본 공격';
     this.core_frac = kw.core_frac !== undefined ? kw.core_frac : null;
+    this.is_pierce = kw.is_pierce ?? false;
   }
 }
 

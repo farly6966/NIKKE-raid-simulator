@@ -654,11 +654,6 @@ export function _in_slot_order(totals: Record<string, number>, names: string[]):
 export function run_request(raw: string | Record<string, any>, include_effective: boolean = false): string {
   _LAST_RESULT = null;
   const payload = _loads(raw);
-  // 尚未移植 fork 的王區間與嚴格禁爆；明確拒絕，避免略過條件後給出看似正常的傷害。
-  if ((payload.bossPhases != null && (!Array.isArray(payload.bossPhases) || payload.bossPhases.length > 0))
-    || payload.strictNoBurst === true) {
-    throw ValueError('快速引擎尚未支援此聯盟戰設定。');
-  }
   _inject_custom_characters(or(get(payload, 'customCharacters'), {}));
   const names: string[] = (item(payload, 'squad') as any[]).map((name) => _py_strip(_py_str(name)));
   const raw_characters = or(get(payload, 'characters'), {} as Record<string, any>) as Record<string, any>;
@@ -742,6 +737,9 @@ export function run_request(raw: string | Record<string, any>, include_effective
   }
   if (no_burst.length) {
     config_in['no_burst_chars'] = no_burst;
+  }
+  if (payload.strictNoBurst === true) {
+    config_in['strict_no_burst'] = true;
   }
   // 손으로 정한 버스트 순서 → config["burst_sequence"].
   const sequence = normalize_burst_sequence(get(payload, 'burstSequence'), names);
@@ -860,6 +858,7 @@ export function run_request(raw: string | Record<string, any>, include_effective
     immune_windows: normalize_immune_windows(get(payload, 'immuneWindows')),
     element_windows: normalize_element_windows(get(payload, 'elementWindows')),
   };
+  if (get(payload, 'bossPhases') != null) enemy['boss_phases'] = payload['bossPhases'];
   // 관통이 꿰뚫는 몸통·파츠 수.
   const pierce = get(payload, 'piercePass');
   if (_py_is_dict(pierce)) {

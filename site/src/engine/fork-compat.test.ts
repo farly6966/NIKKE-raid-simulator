@@ -26,13 +26,21 @@ describe('fork TS 引擎相容邊界', () => {
     expect(result.hitCount).toBe(240);
   });
 
-  it('尚未移植的聯盟戰條件必須明確失敗', () => {
-    expect(() => run_request({ ...request, bossPhases: [{ kind: 'parts', from: 0, to: 5 }] }))
-      .toThrow('快速引擎尚未支援此聯盟戰設定');
-    expect(() => run_request({ ...request, strictNoBurst: true }))
-      .toThrow('快速引擎尚未支援此聯盟戰設定');
+  it('橋接層套用 Boss 時間窗並拒絕無效設定', () => {
+    const blocked = JSON.parse(run_request({ ...request, bossPhases: [{ kind: 'immune', from: 0, to: 10 }] }));
+    expect(blocked.squadTotal).toBe(0);
+    expect(() => run_request({ ...request, bossPhases: [{ kind: 'unknown', from: 0, to: 5 }] }))
+      .toThrow('種類不正確');
     expect(() => run_request({ ...request, burstSwitchDelay: 4 }))
       .toThrow('爆裂階段轉換間隔須為 0～3 秒');
+  });
+
+  it('嚴格禁爆從候選移除指定角色', () => {
+    const squad = build_squad(['리타']);
+    const config = build_config(squad, { duration: 10, first_burst_time: 3, no_burst_char: '리타', strict_no_burst: true });
+    const result = simulate(squad, config, null, true, 42);
+    expect(result.log?.burst_log.some(entry => entry.event === 'stage:1 사용')).toBe(false);
+    expect(() => run_request({ ...request, strictNoBurst: true })).not.toThrow();
   });
 
   it('滿蓄力觸發的持續傷害不能消失', () => {
@@ -73,5 +81,22 @@ describe('fork TS 引擎相容邊界', () => {
     const result = simulate(squad, build_config(squad, { duration: 10, first_burst_time: 3 }), null, true, 42);
     expect(result.log?.buff_events.filter(entry => entry.kind === 'activate' && entry.name === '파워 업!')
       .map(entry => entry.target)).toEqual(['스노우 화이트', '헬름 : 아쿠아마린']);
+  });
+
+  it('蓄力武器使用 CDN 指定的開火後搖，維持渡鴉傷害觸發時序', () => {
+    const squad = build_squad(['레이븐']);
+    const result = simulate(squad, build_config(squad, { duration: 5, rng_mode: 'expected' }), null, false, 42);
+    const shots = result.hits.filter(hit => hit.caster === '레이븐' && hit.skill_name === '기본 공격');
+    expect(shots).toHaveLength(2);
+    expect(shots[0]!.t).toBeCloseTo(1, 4);
+    expect(shots[1]!.t).toBeCloseTo(3 + 5 / 60, 4);
+  });
+
+  it('限時武器變身結束後原武器重新蓄力', () => {
+    const squad = build_squad(['리틀 머메이드', '벨벳', '나유타', '네온 : 비전 아이', '리버렐리오']);
+    const result = simulate(squad, build_config(squad, { duration: 20, first_burst_time: 3 }), null, false, 42);
+    const shots = result.hits.filter(hit => hit.caster === '벨벳' && hit.hit_tag === 'full_charge_hit');
+    expect(shots.slice(0, 4).map(hit => Math.round(hit.t * 1000) / 1000))
+      .toEqual([1, 2.4, 14.2, 15.583]);
   });
 });
