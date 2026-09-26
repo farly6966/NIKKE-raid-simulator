@@ -1107,9 +1107,10 @@ export class CharState {
       bm.notify(`multi_hit:${landed}`, t, this.name);
     }
     const attack_hit = expected ? (1 - (1 - P_hit) ** hit_count) : float(landed > 0);
+    // 同一發先觸發攻擊次數，再觸發命中次數；前者的增益須套用後者的技能傷害。
+    bm.notify('on_attack', t, this.name);
     _notify_frac(bm, 'hit_count', this.name, attack_hit,
       () => bm.notify('hit_count', t, this.name, { core_frac: core_frac }));
-    bm.notify('on_attack', t, this.name);
     if (!this._wc_is_skill_damage()) {
       bm.consume_bullet_buffs(this.name, t);
     }
@@ -1528,6 +1529,9 @@ export class CharState {
       this._sim_log.ammo_log.push(new AmmoLogEntry({ t, caster: this.name, ammo: this.ammo }));
     }
     bm.notify('squad_ammo_consume', t, this.name);
+    bm.notify('on_attack', t, this.name);
+    // Python 在命中事件前處理滿蓄力開火，讓同一發的後續效果看見新增增益。
+    if (is_full) bm.notify('full_charge_fire', t, this.name);
     const attack_hit = expected ? (1 - (1 - P_hit) ** hit_count) : float(landed > 0);
     _notify_frac(bm, 'hit_count', this.name, attack_hit,
       () => bm.notify('hit_count', t, this.name, { core_frac: expected ? P_core : float(is_core) }));
@@ -1554,9 +1558,6 @@ export class CharState {
     const core_frac = expected ? P_core : (is_core ? 1.0 : 0.0);
     _notify_frac(bm, body_ev, this.name, attack_hit * (1.0 - core_frac),
       () => bm.notify_team_hit(body_ev, t, this.name));
-    bm.notify('on_attack', t, this.name);
-    // fork 技能資料仍以 full_charge_fire 觸發持續傷害；上游 TS 漏掉此事件會讓整段 DoT 消失。
-    if (is_full) bm.notify('full_charge_fire', t, this.name);
     if (!this._wc_is_skill_damage()) {
       bm.consume_bullet_buffs(this.name, t);
     }

@@ -131,4 +131,13 @@ describe('fork TS 引擎相容邊界', () => {
       && entry.event === '재장전 완료' && entry.t > 30);
     expect(complete?.t).toBeCloseTo(33 + 48 / 60, 2);
   });
+
+  it('同一發先處理攻擊次數增益，後續命中技能取得新屬性加成', () => {
+    const squad = build_squad(['리타', '그레이브', '레이', '앨리스', '모더니아']);
+    const config = build_config(squad, { duration: 5, first_burst_time: 3, rng_mode: 'expected' });
+    const result = simulate(squad, config, { code: '풍압' }, true, 42);
+    const hit = result.hits.find(entry => entry.caster === '레이' && entry.skill_name === '선두 제압 2');
+    expect(hit?.t).toBeCloseTo(4 + 8 / 60, 2);
+    expect(hit?.damage).toBe(2_091_241);
+  });
 });
