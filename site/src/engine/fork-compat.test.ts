@@ -20,6 +20,17 @@ beforeAll(() => {
 });
 
 describe('fork TS 引擎相容邊界', () => {
+  it('拉毗：小紅帽暫任 B1 時仍收到艾達的基本 B3 增益', () => {
+    const rapi = '라피 : 레드 후드';
+    const squad = build_squad([rapi, '크라운', '에이다', 'test_B3']);
+    const config = build_config(squad, { duration: 90, rng_mode: 'expected' });
+    const log = simulate(squad, config, { code: '', core_px: 0 }, true).log!;
+
+    expect(log.burst_log.some((event) => event.caster === rapi && event.event.includes('사용'))).toBe(true);
+    expect(log.buff_events.some((event) => event.name === '은밀한 지원' && event.target === rapi)).toBe(true);
+    expect(log.buff_events.some((event) => event.name === '은밀한 지원' && event.target === '크라운')).toBe(false);
+  });
+
   it('沿用 fork 固定回充預設值與等級表鍵格式', () => {
     const result = JSON.parse(run_request(request));
     expect(result.squadTotal).toBe(3427327);

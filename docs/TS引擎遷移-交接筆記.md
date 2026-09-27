@@ -2,7 +2,8 @@
 
 ## 2026-09-27 最新狀態
 
-- 工作分支 `codex/ts-engine-union-parity`、草稿 PR #16；正式站與 `master` 尚未改動。獨立的驗證匯出 PR #17 已通過 CI，但合併 `master` 會自動部署，仍待使用者明確同意。
+- 工作分支 `codex/ts-engine-union-parity`、草稿 PR #16；TS 引擎仍未接正式計算。使用者已同意上線，獨立的驗證匯出 PR #17 已合併 `master`（`5990885`），Pages 部署驗證中。本分支已合入該版本。
+- 9/26 Moris 新增艾達目標修正（`543bb9d`）：基本 B3 應按角色資料判定，暫任 B1 的拉毗：小紅帽仍須收到增益。TS 草稿已移植並有整合測試；Python 正式引擎的相同修正在獨立分支 `codex/python-buff-cache-fix`。
 - 查出同幀易傷差異的原因：Python `BuffManager._activate()` 在既有增益疊層／刷新時未清除 `_buffs_cache`。阿斯卡 `안티 AT 필드` 疊層後，同一幀的 `안티 AT 필드 강타` 讀到舊層數；TS 已正確清除。Python 修正為更新既有增益前清除彙總快取，加入直接回歸測試，依 harness 自動更新六組數值有變的 golden。固定亂數與預期值模式現在都 **28/29 組總傷完全相同**。
 - 剩餘一組是 `레이드_라피앨리스`：固定亂數總傷 TS 比 Python 低 0.104542%，預期值高 0.039087%。Python 愛麗絲 575 命中，TS 583 命中。差異從 38.183 秒再裝填結束後出現：Python 直到 39.55 秒才發下一槍，TS 於 38.417 秒發射。把 Python 同隊暫時設為 `control_mode="warn"`（允許多人同時控制）後，總傷及 583 個愛麗絲命中時刻與 TS **完全一致**；全 29 組固定亂數總傷也都與 TS 完全相同。`cd site && npx tsx scripts/engine-expected-parity.ts --parallel-control` 另確認預期值模式 **29/29 完全相同**，但此旗標僅供隔離公式與控制差異，不能當作正式放行。剩餘差異是 TS 缺 fork 的 `solo` 控制權仲裁；不可只改一個固定延遲來遮蓋，須移植整套控制權／點射視窗後重驗。
 - 本階段已通過 Python snapshot 29/29、`python -m unittest discover -s calculator -p 'test_*.py'` 390 項（1 跳過、1 預期失敗）、doclint。`parity:engine` 和 `parity:expected` 仍刻意回傳失敗，尚不可切換正式引擎。

@@ -4970,22 +4970,20 @@ export class BuffManager {
       const caster_def = this._effective_def(caster);
       return this.squad_names.filter((n) => this._effective_def(n) < caster_def);
     }
+    // 原文指定基本爆裂階段；暫時替代的 B1／B2 位置不改變角色基本階段。
     if (ts === 'allies_burst3') {
-      const burst_stages = get(this.state, 'burst_stages', {});
-      return this.squad_names.filter((n) => get(burst_stages, n, null) === '3');
+      return this.squad_names.filter((n) => this._base_burst_stage(n) === '3');
     }
     // "자신을 제외한 기본 버스트 단계 Step3인 페르소나 상태 아군 전체".
     if (ts === 'allies_burst3_persona_excl_self') {
-      const burst_stages = get(this.state, 'burst_stages', {});
       return this.squad_names.filter(
-        (n) => n !== caster && get(burst_stages, n, null) === '3' && this._has_persona_state(n));
+        (n) => n !== caster && this._base_burst_stage(n) === '3' && this._has_persona_state(n));
     }
     // "직전에 버스트 스킬을 사용한 기본 버스트 단계 Step 3 아군" — burst_casted ∩ B3.
     if (ts === 'allies_burst_casted_burst3') {
       const casted = get(this.state, 'burst_casted', {});
-      const burst_stages = get(this.state, 'burst_stages', {});
       return this.squad_names.filter(
-        (n) => truthy(get(casted, n)) && get(burst_stages, n, null) === '3');
+        (n) => truthy(get(casted, n)) && this._base_burst_stage(n) === '3');
     }
 
     // 적 관련 (타임라인 처리)
@@ -4997,6 +4995,12 @@ export class BuffManager {
 
     // 커버, 발사체 등
     return [];
+  }
+
+  /** 角色資料中的基本爆裂階段；不讀戰鬥中暫時替代的階段。 */
+  _base_burst_stage(name: string): string | null {
+    const stage = get(get(_NIKKE(), name, {}), 'burst_stage', null);
+    return stage == null ? null : String(stage);
   }
 
   // py: calculator/buff_manager.py:4101
