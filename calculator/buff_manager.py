@@ -2462,6 +2462,8 @@ class BuffManager:
                     break
 
         if existing:
+            # 同一影格再次疊層或刷新時，先丟棄舊的傷害彙總；後續連鎖觸發必須看到新值。
+            self._buffs_cache.clear()
             if max_stack == 1:
                 existing.activated_at = t
                 existing.expires_at = expires
