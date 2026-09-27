@@ -1456,7 +1456,20 @@ export function mountUnionRaid(hosts: UnionHosts, deps: UnionDeps): UnionHandle 
       const texts = await Promise.all(files.map(async (file) => ({
         name: file.name, text: await file.text(),
       })));
-      const { profiles, failed } = parseExiaBatch(texts, deps.settings);
+      const resultFiles = texts.filter(file => {
+        try {
+          const data: unknown = JSON.parse(file.text);
+          if (!data || typeof data !== 'object' || Array.isArray(data)) return false;
+          const record = data as Record<string, unknown>;
+          return (Array.isArray(record.phases) && Array.isArray(record.candidates))
+            || record.format === 'nikke-live-raid';
+        } catch { return false; }
+      });
+      const resultSet = new Set(resultFiles);
+      const profileFiles = texts.filter(file => !resultSet.has(file));
+      const resultHint = '「聯盟戰試算結果」應到頁首「實戰推演」分頁匯入；此處只收 ExiaInvasion 成員養成資料。';
+      if (!profileFiles.length) { fileStatus.textContent = resultHint; return; }
+      const { profiles, failed } = parseExiaBatch(profileFiles, deps.settings);
       if (personal) setMode(false);
 
       if (profiles.length > 0) {
@@ -1512,7 +1525,7 @@ export function mountUnionRaid(hosts: UnionHosts, deps: UnionDeps): UnionHandle 
 
       fileStatus.textContent = t('추가 {added}명 · 갱신 {updated}명 · 전체 {total}명 · 실패 {failed}개', {
         added, updated, total: members.filter(row => row.state === 'public').length, failed: failed.length,
-      });
+      }) + (resultFiles.length ? ` · ${resultFiles.length} 份試算結果已略過。${resultHint}` : '');
     } catch (error) {
       fileStatus.textContent = error instanceof Error ? error.message : String(error);
     }
