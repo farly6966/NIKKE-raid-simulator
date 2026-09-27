@@ -738,6 +738,19 @@ describe('calculator UI', () => {
     })));
   });
 
+  it('directs a raid result export to live planning instead of adding a broken member', async () => {
+    seedUnionDraft();
+    mountCalculator(root, { catalog, settings, version: 'v1', client: new FakeClient(), storage: localStorage });
+    const input = root.querySelector<HTMLInputElement>('[data-union-files]')!;
+    const exported = JSON.stringify({ phases: [[], [], []], candidates: [] });
+    const file = new File([exported], '聯盟戰試算結果.json');
+    Object.defineProperty(file, 'text', { value: async () => exported });
+    Object.defineProperty(input, 'files', { configurable: true, value: [file] });
+    input.dispatchEvent(new Event('change'));
+    await waitForUi(() => expect(root.querySelector('[data-union-file-status]')!.textContent).toContain('實戰推演'));
+    expect(root.querySelectorAll('[data-union-member]')).toHaveLength(0);
+  });
+
   it('appends JSON imports, updates duplicate members, and keeps accounts when switching modes', async () => {
     seedUnionDraft();
     const client = new FakeClient();
