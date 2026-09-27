@@ -3730,23 +3730,23 @@ class BuffManager:
             caster_def = self._effective_def(caster)
             return [n for n in self.squad_names if self._effective_def(n) < caster_def]
         if target == "allies_burst3":
-            burst_stages = self.state.get("burst_stages", {})
-            return [n for n in self.squad_names if burst_stages.get(n) == "3"]
+            # 原文指定「基本」爆裂階段；拉毗：小紅帽暫任 B1 時仍是基本 B3。
+            return [n for n in self.squad_names
+                    if str(_NIKKE.get(n, {}).get("burst_stage")) == "3"]
         # "자신을 제외한 기본 버스트 단계 Step3인 페르소나 상태 아군 전체".
         # 페르소나 상태 = persona_state 마커 버프 보유. allies_with_buff:와 달리
         # 버프 이름이 캐릭터마다 다르므로(요한나/코노하나사쿠야) stat으로 판정한다.
         if target == "allies_burst3_persona_excl_self":
-            burst_stages = self.state.get("burst_stages", {})
             return [n for n in self.squad_names
-                    if n != caster and burst_stages.get(n) == "3" and self._has_persona_state(n)]
+                    if n != caster and str(_NIKKE.get(n, {}).get("burst_stage")) == "3"
+                    and self._has_persona_state(n)]
         # "직전에 버스트 스킬을 사용한 기본 버스트 단계 Step 3 아군" — burst_casted ∩ B3.
         # allies_burst_casted_weapon:과 같은 취지다 — burst_casted를 condition으로 두면
         # 시전자 기준으로만 평가돼 "누가 버스트를 썼나"를 대상 필터로 쓸 수 없다.
         if target == "allies_burst_casted_burst3":
             casted = self.state.get("burst_casted", {})
-            burst_stages = self.state.get("burst_stages", {})
             return [n for n in self.squad_names
-                    if casted.get(n) and burst_stages.get(n) == "3"]
+                    if casted.get(n) and str(_NIKKE.get(n, {}).get("burst_stage")) == "3"]
 
         # 적 관련 (타임라인 처리)
         # `same_target:[이름]`도 같은 적을 가리킨다 — 접두사까지 봐야 []로 새지 않는다.
