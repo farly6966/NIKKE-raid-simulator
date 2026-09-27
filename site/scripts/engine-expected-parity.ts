@@ -9,6 +9,7 @@ import { simulate } from '../src/engine/timeline';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const python = process.platform === 'win32' ? 'python' : 'python3';
+const parallelControl = process.argv.includes('--parallel-control');
 const code = [
   'import json',
   'from context.snapshot import SQUADS, build_squad',
@@ -19,6 +20,7 @@ const code = [
   '    squad = build_squad(info["members"], info.get("chars"))',
   '    config = build_config(squad, info.get("config"))',
   '    config["rng_mode"] = "expected"',
+  ...(parallelControl ? ['    config["control_mode"] = "warn"'] : []),
   '    result = simulate(squad, config=config, enemy=info.get("enemy"), verbose=False, seed=info["seed"])',
   '    out[name] = {"total": result.squad_total, "chars": result.char_total}',
   'print(json.dumps(out, ensure_ascii=False))',
@@ -38,6 +40,7 @@ const rows = Object.entries(squads).filter(([name]) => !only || name === only).m
   const squad = build_squad(info.members, info.chars ?? null);
   const config = build_config(squad, info.config ?? null);
   config.rng_mode = 'expected';
+  if (parallelControl) config.control_mode = 'warn';
   const result = simulate(squad, config, info.enemy ?? null, false, info.seed);
   const baseline = expected[name]!;
   return { name, expected: baseline.total, actual: result.squad_total,
@@ -49,7 +52,7 @@ if (rows.length === 0) throw new Error(`找不到指定基準：${only}`);
 const exact = rows.filter(row => row.exact).length;
 if (process.argv.includes('--json')) process.stdout.write(JSON.stringify({ total: rows.length, exact, rows }));
 else {
-  process.stdout.write(`TS/Python expected parity: ${exact}/${rows.length} exact\n`);
+  process.stdout.write(`TS/Python expected parity${parallelControl ? ' (parallel-control diagnosis)' : ''}: ${exact}/${rows.length} exact\n`);
   for (const row of rows.filter(row => !row.exact)) {
     process.stdout.write(`${row.name}: ${row.expected} → ${row.actual} (${row.deltaPct.toFixed(5)}%)\n`);
   }
