@@ -1,15 +1,23 @@
-import { describe, expect, it } from 'vitest';
+// @vitest-environment jsdom
+
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { Blob as StreamBlob } from 'node:buffer';
 
 import {
   bossCodeForShape, buildGrid, shapeOf, buildJobs, deckForMember, estimateScanSeconds, gridToCsv,
   groupResults, humanSeconds,
   DIRECT_SNIPPET, MEMBER_SNIPPET, parseDirectScan, parseMemberList, readBossCode, readDeckCode,
   readUnionCode, remainingSeconds, unionCodeOf, unionShareOf, encodeUnionDraft, decodeUnionDraft,
-  DECK_SLOTS, cleanDeckLabel, DECK_LABEL_MAX, defaultDeckDecision,
+  DECK_SLOTS, cleanDeckLabel, DECK_LABEL_MAX, defaultDeckDecision, mountUnionRaid,
 } from './union-raid';
 import type { BossSlot, JobResult, MemberRow } from './union-raid';
 import { encodeBattleCode, encodeShareCode } from './share-code';
-import type { BattleSettings, DeckState } from './types';
+import type { BattleSettings, DeckState, SettingsCatalog } from './types';
+import type { RaidPlannerInput, RaidPlannerPlan } from './union-raid-planner';
+
+// jsdom 的 Blob 未提供 stream；gzip 匯入回歸仍需瀏覽器支援的串流介面。
+beforeEach(() => vi.stubGlobal('Blob', StreamBlob));
+afterEach(() => vi.unstubAllGlobals());
 
 const battle: BattleSettings = {
   duration: 90, synchroLevel: 400, enemyDef: 31_784, enemyCode: '전격', coreEnabled: false,
@@ -22,6 +30,125 @@ const battle: BattleSettings = {
 const member = (over: Partial<MemberRow> = {}): MemberRow => ({
   name: '김붕붕', openid: '10620366463748434922', synchro: 843, level: 894, area: 83,
   state: 'public', picked: true, ...over,
+});
+
+describe('排刀血量修改', () => {
+  class PlannerWorker extends EventTarget {
+    static instances: PlannerWorker[] = [];
+    input!: RaidPlannerInput;
+    terminate = vi.fn();
+    constructor() { super(); PlannerWorker.instances.push(this); }
+    postMessage(input: RaidPlannerInput) { this.input = input; }
+    finish() {
+      const candidate = this.input.candidates[0]!;
+      const hp = this.input.phases[0]![candidate.bossIndex]!;
+      const shot = { ...candidate, phase: 0, effectiveDamage: candidate.damage, remainingAfter: hp - candidate.damage };
+      const plan: RaidPlannerPlan = {
+        status: 'Optimal', provenOptimal: true, reached: 'phase1', candidateMembers: 1,
+        attackCapacity: 1, plannedAttacks: 1, totalFiniteHp: hp,
+        effectiveFiniteDamage: candidate.damage, endlessDamage: 0,
+        members: [{ memberId: candidate.memberId, memberName: candidate.memberName, synchro: candidate.synchro, capacity: 1, shots: [shot] }],
+        bars: [{ phase: 0, bossIndex: candidate.bossIndex, hp, rawDamage: candidate.damage,
+          effectiveDamage: candidate.damage, remaining: hp - candidate.damage, cleared: false, shots: [shot] }],
+      };
+      this.dispatchEvent(new MessageEvent('message', { data: { kind: 'done', plan } }));
+    }
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    localStorage.clear();
+    document.body.replaceChildren();
+    PlannerWorker.instances = [];
+  });
+
+  async function readyPlanner() {
+    localStorage.clear();
+    vi.stubGlobal('Worker', PlannerWorker);
+    const squad = ['A', 'B', 'C', 'D', 'E'];
+    const deck = { code: encodeShareCode([{ id: 1, squad, characters: {} }], false) };
+    localStorage.setItem('nikke-union-board-v2', encodeUnionDraft(Array.from({ length: 5 }, (_, index) => ({
+      name: `王 ${index + 1}`, enabled: index === 0, code: encodeBattleCode(battle),
+      decks: Array.from({ length: DECK_SLOTS }, (_, at) => index === 0 && at === 0 ? { ...deck } : { code: '' }),
+    }))));
+    const panel = document.createElement('section');
+    panel.innerHTML = `
+      <button data-union-mode="personal"></button>
+      ${[1, 2, 3, 4].map(n => `<div data-union-step="${n}"></div>`).join('')}
+      ${['snippet', 'paste', 'direct-snippet', 'direct-paste', 'set-code'].map(name => `<textarea data-union-${name}></textarea>`).join('')}
+      ${['copy', 'read', 'scan', 'scan-stop', 'direct-copy', 'direct-read', 'pick-all', 'pick-none', 'set-copy', 'set-paste', 'set-apply', 'set-close'].map(name => `<button data-union-${name}></button>`).join('')}
+      ${['list-status', 'scan-status', 'scan-progress', 'members', 'ask', 'ask-text', 'direct-status', 'drop', 'file-status', 'wash-drop', 'wash-status', 'bosses', 'set-status', 'set-box', 'run-status', 'run-progress', 'report', 'grid', 'raid-planner'].map(name => `<div data-union-${name}></div>`).join('')}
+      <input type="file" data-union-files><input type="file" data-union-wash-files>
+      <div><button data-union-run></button><button data-union-stop hidden></button></div>`;
+    document.body.append(panel);
+    const settings: SettingsCatalog = {
+      characters: {}, cubes: {}, collectionStages: [], weaponTypes: [], buffTargetWatch: {},
+      normalHitCoeff: {}, consoleClasses: [], consoleCompanies: [], overloadFields: {}, manualStats: {}, favoriteItems: {},
+    };
+    const simulate = vi.fn(async () => ({ squadTotal: 100_000_000, duration: 180, hitCount: 1,
+      charTotals: { A: 100_000_000 }, previewNote: '', deviations: '' }));
+    mountUnionRaid({ panel }, {
+      proxy: '', settings, catalog: [], simulate, imageOf: () => undefined, labelOf: name => name,
+      catalogNames: () => squad, currentBattleCode: () => encodeBattleCode(battle), currentDeckCode: () => deck.code,
+      me: () => ({ name: '測試成員', synchro: 400, console: battle.console, roster: {}, owned: 0 }),
+    });
+    panel.querySelector<HTMLButtonElement>('[data-union-mode="personal"]')!.click();
+    panel.querySelector<HTMLButtonElement>('[data-union-run]')!.click();
+    await vi.waitFor(() => expect(panel.querySelector('[data-union-raid-planner] .union-plan-health')).not.toBeNull());
+    expect(simulate).toHaveBeenCalledOnce();
+    const planner = panel.querySelector<HTMLElement>('[data-union-raid-planner]')!;
+    const button = (text: string) => [...planner.querySelectorAll<HTMLButtonElement>('button')].find(item => item.textContent === text)!;
+    return { planner, button, simulate };
+  }
+
+  it('完成後改血量會移除舊方案與 CSV，保留焦點並使用新血量重排', async () => {
+    const { planner, button, simulate } = await readyPlanner();
+    button('計算全聯盟最優出刀').click();
+    PlannerWorker.instances[0]!.finish();
+    expect(planner.querySelector('.union-plan-summary')).not.toBeNull();
+    const oldExport = button('下載最優出刀 CSV');
+    const hp = planner.querySelector<HTMLInputElement>('.union-plan-health input')!;
+    hp.focus(); hp.value = '1234'; hp.dispatchEvent(new Event('input'));
+    hp.dispatchEvent(new Event('change'));
+    expect(document.activeElement).toBe(hp);
+    expect(planner.querySelector('.union-plan-summary')).toBeNull();
+    expect(planner.querySelector('.union-plan-phase')).toBeNull();
+    expect(planner.contains(oldExport)).toBe(false);
+    expect(planner.textContent).toContain('血量已變更，請重新計算');
+    const download = vi.fn(); vi.stubGlobal('URL', { createObjectURL: download });
+    oldExport.click();
+    expect(download).not.toHaveBeenCalled();
+    vi.unstubAllGlobals(); vi.stubGlobal('Worker', PlannerWorker);
+    button('計算全聯盟最優出刀').click();
+    expect(PlannerWorker.instances[1]!.input.phases[0]![0]).toBe(1234 * 100_000_000);
+    expect(simulate).toHaveBeenCalledOnce();
+    PlannerWorker.instances[1]!.finish();
+    expect(planner.querySelector('.union-plan-summary')).not.toBeNull();
+  });
+
+  it('計算中一開始輸入就取消舊 worker，晚到回覆不能覆蓋新值或新方案', async () => {
+    const { planner, button } = await readyPlanner();
+    button('計算全聯盟最優出刀').click();
+    const oldWorker = PlannerWorker.instances[0]!;
+    const hp = planner.querySelector<HTMLInputElement>('.union-plan-health input')!;
+    hp.focus(); hp.value = '2345'; hp.dispatchEvent(new Event('input'));
+    expect(oldWorker.terminate).toHaveBeenCalledOnce();
+    expect(button('計算全聯盟最優出刀').disabled).toBe(false);
+    expect(button('停止排刀').hidden).toBe(true);
+    oldWorker.finish();
+    expect(document.activeElement).toBe(hp);
+    expect(hp.value).toBe('2345');
+    expect(planner.querySelector('.union-plan-summary')).toBeNull();
+    hp.dispatchEvent(new Event('change'));
+    button('計算全聯盟最優出刀').click();
+    const newWorker = PlannerWorker.instances[1]!;
+    oldWorker.finish();
+    expect(planner.querySelector('.union-plan-summary')).toBeNull();
+    expect(newWorker.terminate).not.toHaveBeenCalled();
+    expect(newWorker.input.phases[0]![0]).toBe(2345 * 100_000_000);
+    newWorker.finish();
+    expect(planner.querySelector('.union-plan-summary')).not.toBeNull();
+  });
 });
 
 describe('기본 편성을 얹을 자리', () => {

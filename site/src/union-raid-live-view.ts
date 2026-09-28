@@ -81,6 +81,21 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
   let fired: FiredShot[] = [];
   let plan: RaidPlannerPlan | undefined;
   let worker: Worker | undefined;
+  let calculationState: 'idle' | 'running' | 'success' | 'error' = 'idle';
+  const retryButton = el('button', 'roster-import', '重新計算');
+  retryButton.type = 'button'; retryButton.hidden = true;
+  retryButton.addEventListener('click', () => resolve());
+  status.after(retryButton);
+  interface ShotDraft {
+    phase: number; bossIndex: number; memberId: string; deckIndex: number;
+    damage: string; verified: boolean;
+  }
+  let recorderDraft: ShotDraft | undefined;
+  const quickDrafts = new Map<string, ShotDraft>();
+  const pendingDrafts = new Map<string, ShotDraft>();
+  const clearDrafts = (): void => {
+    recorderDraft = undefined; quickDrafts.clear(); pendingDrafts.clear();
+  };
   let lastPendingKeys = new Set<string>();
   let calibration = freshCalibration();
   let recovery: LiveRecovery | undefined;
@@ -107,6 +122,7 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
         worker?.terminate(); worker = undefined;
         const previous = lastPendingKeys;
         plan = preview;
+        calculationState = 'success'; retryButton.hidden = true;
         lastPendingKeys = new Set(plan.bars.flatMap(bar => bar.shots.map(pendingKey)));
         status.textContent = '';
         renderAll(previous);
@@ -171,6 +187,7 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
   }
 
   function applySession(next: LiveSession): void {
+    clearDrafts();
     base = next.base; fired = next.fired; calibration = trackCalibration(next.calibration);
     lastPendingKeys = new Set(); plan = undefined;
     importBox.hidden = true; board.hidden = false; importStatus.textContent = '';
@@ -230,7 +247,7 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
   }
 
   function resolve(): void {
-    if (!base) return;
+    if (!base) { calculationState = 'idle'; retryButton.hidden = true; return; }
     worker?.terminate();
     const input: RaidPlannerInput = {
       phases: remainingPhases(base.phases, fired),
@@ -238,9 +255,18 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
       alreadyUsed: usedCounts(fired),
     };
     plan = undefined;
+    calculationState = 'running'; retryButton.hidden = true;
     status.textContent = '正在重新計算…';
     renderAll(lastPendingKeys);
-    const next = new Worker(new URL('./union-planner.worker.ts', import.meta.url), { type: 'module' });
+    const fail = (message: string): void => {
+      worker?.terminate(); worker = undefined;
+      calculationState = 'error'; retryButton.hidden = false;
+      status.textContent = `重算失敗：${message}（已確認的紀錄不會遺失，但暫時算不出新的建議出刀）`;
+      renderAll(lastPendingKeys);
+    };
+    let next: Worker;
+    try { next = new Worker(new URL('./union-planner.worker.ts', import.meta.url), { type: 'module' }); }
+    catch (error) { fail(error instanceof Error ? error.message : String(error)); return; }
     worker = next;
     next.addEventListener('message', (event: MessageEvent<{ kind: string; message?: string; plan?: RaidPlannerPlan }>) => {
       if (worker !== next) return;
@@ -249,21 +275,20 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
       if (event.data.kind === 'done' && event.data.plan) {
         const previous = lastPendingKeys;
         plan = event.data.plan;
+        calculationState = 'success';
         lastPendingKeys = new Set(plan.bars.flatMap((bar) => bar.shots.map(pendingKey)));
         status.textContent = '';
         renderAll(previous);
       } else {
-        status.textContent = `重算失敗：${event.data.message ?? '未知錯誤'}（已確認的紀錄不會遺失，但暫時算不出新的建議出刀）`;
-        renderAll(lastPendingKeys);
+        fail(event.data.message ?? '未知錯誤');
       }
     });
     next.addEventListener('error', (event) => {
       if (worker !== next) return;
-      next.terminate(); worker = undefined;
-      status.textContent = `重算失敗：${event.message}`;
-      renderAll(lastPendingKeys);
+      fail(event.message);
     });
-    next.postMessage(input);
+    try { next.postMessage(input); }
+    catch (error) { fail(error instanceof Error ? error.message : String(error)); }
   }
 
   const bossName = (bossIndex: number): string =>
@@ -285,15 +310,21 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
     const wrap = el('span', 'live-quick-confirm');
     const damageInput = el('input', 'live-damage-input');
     damageInput.type = 'number'; damageInput.min = '0.01'; damageInput.step = '0.01';
-    damageInput.value = (shot.damage / YI).toFixed(2);
+    const key = pendingKey(shot);
+    wrap.dataset.liveDraftKind = 'quick'; wrap.dataset.liveDraftKey = key;
+    const draft = quickDrafts.get(key);
+    damageInput.value = draft?.damage ?? '';
+    damageInput.placeholder = '填入結算傷害';
     damageInput.ariaLabel = `${shot.memberName} 打 ${bossName(shot.bossIndex)} 的實際傷害（億）`;
     const confirm = el('button', 'roster-import', '確認');
-    const verification = sampleVerification();
+    const saveDraft = (): void => { quickDrafts.set(key, { ...shot, damage: damageInput.value, verified: verification.checked() }); };
+    const verification = sampleVerification(draft?.verified, saveDraft);
+    damageInput.addEventListener('input', saveDraft);
     confirm.type = 'button';
     confirm.addEventListener('click', () => {
       const picked = findCandidate(base!.candidates, shot.memberId, shot.bossIndex, shot.deckIndex);
       const damage = Number(damageInput.value);
-      if (!picked || !Number.isFinite(damage) || damage <= 0) {
+      if (!damageInput.value.trim() || !picked || !Number.isFinite(damage) || damage <= 0) {
         status.textContent = '請填入大於 0 的實際傷害。';
         return;
       }
@@ -412,7 +443,7 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
       metric('已確認出刀', `${fired.length} / ${totalCapacity}`),
       metric('帳面剩餘刀', String(Math.max(0, totalCapacity - fired.length))),
       metric('仍有候選可排', String(remainingCapacity)),
-      metric('重算狀態', plan ? '建議已更新' : '正在計算'),
+      metric('重算狀態', { idle: '尚未計算', running: '正在計算', success: '建議已更新', error: '計算失敗，請重試' }[calculationState]),
     );
     summaryBox.append(metrics);
 
@@ -434,6 +465,7 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
     if (!suggested.length) {
       recommendation.append(el('span', 'field-note', plan
         ? '目前最佳解沒有分配這一階段；仍可用下方「記錄實際出刀」手動登記。'
+        : calculationState === 'error' ? '建議計算失敗，請按「重新計算」；仍可用下方表單登記。'
         : '重算完成後會顯示；現在仍可先用下方表單登記。'));
     } else {
       const list = el('div', 'live-recommendation-list');
@@ -448,11 +480,13 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
     summaryBox.append(recommendation);
   }
 
-  function sampleVerification() {
+  function sampleVerification(checked = false, onChange?: () => void) {
     const label = el('label', 'live-sample-verification');
     const input = el('input'); input.type = 'checkbox';
+    input.checked = checked;
+    if (onChange) input.addEventListener('change', onChange);
     label.append(input, '已核對結算、正常完整出刀（含極限收尾；納入分析）');
-    return { label, checked: () => calibration.enabled && input.checked };
+    return { label, input, checked: () => calibration.enabled && input.checked };
   }
 
   function recordShot(candidate: RaidPlannerCandidate, phase: number, damageYi: number, verified = false, acknowledged = false): boolean {
@@ -499,6 +533,7 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
     recorderBox.replaceChildren();
     if (!base) return;
     const now = currentPhase();
+    const draft = recorderDraft;
     const card = el('section', 'live-recorder-card');
     const heading = el('div', 'live-recorder-heading');
     heading.append(el('h3', undefined, '記錄實際出刀'),
@@ -527,6 +562,15 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
     const damageInput = el('input', 'live-damage-input');
     damageInput.type = 'number'; damageInput.min = '0.01'; damageInput.step = '0.01';
     damageInput.placeholder = '例如 523.4'; damageInput.ariaLabel = '實際傷害（億）';
+    const saveDraft = (): void => {
+      recorderDraft = pickedDeck === undefined ? undefined : {
+        phase: now, bossIndex: Number(bossSelect.value), memberId: memberSelect.value,
+        deckIndex: pickedDeck, damage: damageInput.value, verified: verification.checked(),
+      };
+    };
+    const verification = sampleVerification(draft?.verified, saveDraft);
+    damageInput.addEventListener('input', saveDraft);
+    const clearDamage = (): void => { damageInput.value = ''; verification.input.checked = false; };
 
     const candidatesForSelection = (): RaidPlannerCandidate[] => remainingCandidates(effectiveCandidates(), fired)
       .filter((candidate) => candidate.bossIndex === Number(bossSelect.value)
@@ -537,21 +581,29 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
      * 같은 니케를 두 번 못 쓴다」는 배제가 그 덱의 명단으로 돌아 이후 건의가 통째로
      * 어긋난다. 게다가 조용히 어긋난다.
      */
-    const updateDecks = (): void => {
+    const updateDecks = (restoreDraft = false): void => {
       deckBox.replaceChildren();
       const options = candidatesForSelection();
       const suggested = suggestedFor(now, Number(bossSelect.value));
       const suggestedDeck = suggested?.memberId === memberSelect.value ? suggested.deckIndex : undefined;
-      const picked = options.find((option) => option.deckIndex === suggestedDeck) ?? options[0];
+      const picked = (restoreDraft && draft ? options.find((option) => option.deckIndex === draft.deckIndex) : undefined)
+        ?? options.find((option) => option.deckIndex === suggestedDeck) ?? options[0];
       pickedDeck = picked?.deckIndex;
-      damageInput.value = picked ? (picked.damage / YI).toFixed(2) : '';
+      card.dataset.liveDraftKind = 'recorder';
+      card.dataset.liveDraftKey = picked ? pendingKey({ ...picked, phase: now }) : '';
+      clearDamage();
+      if (restoreDraft && draft && picked?.deckIndex === draft.deckIndex) {
+        damageInput.value = draft.damage; verification.input.checked = draft.verified;
+      }
       if (!options.length) return;
       deckBox.append(teamPicker(options, picked!.deckIndex, '實際使用隊伍', (candidate) => {
+        if (pickedDeck !== candidate.deckIndex) clearDamage();
         pickedDeck = candidate.deckIndex;
-        damageInput.value = (candidate.damage / YI).toFixed(2);
+        card.dataset.liveDraftKey = pendingKey({ ...candidate, phase: now });
+        saveDraft();
       }, suggestedDeck));
     };
-    const updateMembers = (): void => {
+    const updateMembers = (restoreDraft = false): void => {
       memberSelect.replaceChildren();
       const boss = Number(bossSelect.value);
       const unique = new Map<string, string>();
@@ -567,19 +619,21 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
       }
       // 이름순은 그대로 두고 **고른 값만** 건의로 맞춘다 — 목록이 매번 재배열되면
       // 현장에서 사람을 눈으로 찾기 어렵다.
-      if (suggested && unique.has(suggested.memberId)) memberSelect.value = suggested.memberId;
-      updateDecks();
+      if (restoreDraft && draft && unique.has(draft.memberId)) memberSelect.value = draft.memberId;
+      else if (suggested && unique.has(suggested.memberId)) memberSelect.value = suggested.memberId;
+      updateDecks(restoreDraft);
     };
-    bossSelect.addEventListener('change', updateMembers);
-    memberSelect.addEventListener('change', updateDecks);
-    updateMembers();
+    bossSelect.addEventListener('change', () => { updateMembers(); saveDraft(); });
+    memberSelect.addEventListener('change', () => { updateDecks(); saveDraft(); });
+    if (draft) bossSelect.value = String(draft.bossIndex);
+    updateMembers(Boolean(draft));
 
     const confirm = el('button', 'roster-import union-run', '確認這一刀並重算');
-    const verification = sampleVerification();
     confirm.type = 'button';
     confirm.addEventListener('click', () => {
       const picked = candidatesForSelection().find((candidate) => candidate.deckIndex === pickedDeck);
-      if (picked) recordShot(picked, now, Number(damageInput.value), verification.checked());
+      if (!damageInput.value.trim()) status.textContent = '請填入大於 0 的實際傷害。';
+      else if (picked) recordShot(picked, now, Number(damageInput.value), verification.checked());
       else status.textContent = '這位成員在這隻王沒有可用隊伍。';
     });
     controls.append(
@@ -750,13 +804,24 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
     const damageInput = el('input', 'live-damage-input');
     damageInput.type = 'number'; damageInput.min = '0.01'; damageInput.step = '0.01';
     damageInput.ariaLabel = `${shot.memberName} 實際傷害（億）`;
-    let pickedDeck = options.some((o) => o.deckIndex === shot.deckIndex) ? shot.deckIndex : options[0]?.deckIndex;
+    damageInput.placeholder = '填入結算傷害';
+    const key = pendingKey(shot);
+    const draft = pendingDrafts.get(key);
+    let pickedDeck = draft?.deckIndex ?? (options.some((o) => o.deckIndex === shot.deckIndex) ? shot.deckIndex : options[0]?.deckIndex);
+    damageInput.value = draft?.damage ?? '';
+    const saveDraft = (): void => {
+      if (pickedDeck !== undefined) pendingDrafts.set(key, {
+        ...shot, deckIndex: pickedDeck, damage: damageInput.value, verified: verification.checked(),
+      });
+    };
+    const verification = sampleVerification(draft?.verified, saveDraft);
+    damageInput.addEventListener('input', saveDraft);
 
     const drawPreview = (): void => {
       preview.replaceChildren();
       const picked = options.find((o) => o.deckIndex === pickedDeck);
+      row.dataset.liveDraftKind = 'pending'; row.dataset.liveDraftKey = picked ? pendingKey({ ...picked, phase: shot.phase }) : '';
       if (picked) preview.append(teamBadge(picked, `預估 ${yi(picked.damage)}`));
-      damageInput.value = picked ? (picked.damage / YI).toFixed(2) : '';
     };
     drawPreview();
 
@@ -766,7 +831,9 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
       const fold = el('details', 'live-team-swap');
       fold.append(el('summary', undefined, '換隊伍'));
       fold.append(teamPicker(options, pickedDeck ?? -1, `${shot.memberName} 實際隊伍`, (candidate) => {
+        if (pickedDeck !== candidate.deckIndex) { damageInput.value = ''; verification.input.checked = false; }
         pickedDeck = candidate.deckIndex;
+        saveDraft();
         drawPreview();
         fold.open = false;
       }));
@@ -774,13 +841,12 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
     }
 
     const confirm = el('button', 'roster-import', '確認並重算');
-    const verification = sampleVerification();
     confirm.type = 'button';
     confirm.addEventListener('click', () => {
       const picked = pickedDeck === undefined ? undefined
         : findCandidate(base!.candidates, shot.memberId, shot.bossIndex, pickedDeck);
       const damage = Number(damageInput.value);
-      if (!picked || !Number.isFinite(damage) || damage <= 0) {
+      if (!damageInput.value.trim() || !picked || !Number.isFinite(damage) || damage <= 0) {
         status.textContent = '請選擇實際隊伍並填入大於 0 的傷害。';
         return;
       }
@@ -830,6 +896,7 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
     if (!trulyCleared && !(bar?.shots.length)) {
       body.append(el('p', 'field-note', plan
         ? '目前最佳解沒有分配這隻王；可用上方「記錄實際出刀」手動選人與隊伍。'
+        : calculationState === 'error' ? '建議計算失敗，請按「重新計算」；仍可用上方「記錄實際出刀」登記。'
         : '正在重算建議；可先用上方「記錄實際出刀」登記。'));
     }
     wrap.append(body);
@@ -837,6 +904,26 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
   }
 
   function renderAll(previousKeys: Set<string>): void {
+    // 重繪後只把焦點還給同一份草稿的同一欄位，不跳到其他成員或隊伍。
+    const active = document.activeElement instanceof HTMLElement && panel.contains(document.activeElement)
+      ? document.activeElement : undefined;
+    const activeScope = active?.closest<HTMLElement>('[data-live-draft-key]');
+    const focus = active && activeScope ? {
+      kind: activeScope.dataset.liveDraftKind, key: activeScope.dataset.liveDraftKey,
+      field: active.classList.contains('live-damage-input') ? 'damage'
+        : active.closest('.live-sample-verification') ? 'verification' : undefined,
+    } : undefined;
+    // 草稿只屬於原本的階段／成員／王／隊伍，重排不能把它套到新的建議上。
+    const now = currentPhase();
+    const available = new Set(remainingCandidates(base?.candidates ?? [], fired)
+      .map(candidate => pendingKey({ ...candidate, phase: now })));
+    const hp = base ? remainingPhases(base.phases, fired)[now] : undefined;
+    const validDraft = (draft: ShotDraft): boolean => available.has(pendingKey(draft))
+      && (now === 3 || (hp?.[draft.bossIndex] ?? 0) > 0);
+    if (recorderDraft && !validDraft(recorderDraft)) recorderDraft = undefined;
+    for (const drafts of [quickDrafts, pendingDrafts]) {
+      for (const [key, draft] of drafts) if (!validDraft(draft)) drafts.delete(key);
+    }
     history.replaceChildren(el('summary', undefined, `全部出刀紀錄（${fired.length} 刀）`));
     for (const [index, shot] of fired.entries()) {
       const row = el('div', 'live-history-row');
@@ -850,15 +937,23 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
     renderPhaseStepper();
     renderSummary();
     renderRecorder();
-    const now = currentPhase();
     renderMembers(now);
     renderOverview(now);
     bossesBox.replaceChildren();
+    const restoreFocus = (): void => {
+      if (!focus?.field) return;
+      const scope = [...panel.querySelectorAll<HTMLElement>('[data-live-draft-key]')]
+        .find(node => node.dataset.liveDraftKind === focus.kind && node.dataset.liveDraftKey === focus.key);
+      scope?.querySelector<HTMLElement>(focus.field === 'damage' ? '.live-damage-input' : '.live-sample-verification input')
+        ?.focus({ preventScroll: true });
+    };
     if (now === 3) {
       bossesBox.append(el('p', 'field-note', '三階段已全清，現在可從上方登記無限五王的實際出刀；重算建議會持續更新。'));
+      restoreFocus();
       return;
     }
     for (let bossIndex = 0; bossIndex < 5; bossIndex++) bossesBox.append(renderBossBlock(now, bossIndex, previousKeys));
+    restoreFocus();
   }
 
   function applyImport(text: string): void {
@@ -899,6 +994,7 @@ export function mountLiveRaid(hosts: LiveRaidHosts, deps: LiveRaidDeps): LiveRai
     if (!base) return;
     requestAction(`將清空 ${fired.length} 刀現場紀錄及校正設定。清空前的進度會保留，可使用「還原上一份進度」取回。`, '確認清空', () => {
       checkpoint('清空前'); fired = []; calibration = freshCalibration();
+      clearDrafts();
       lastPendingKeys = new Set(); plan = undefined; persist(); resolve();
     });
   });
