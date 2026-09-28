@@ -2689,6 +2689,15 @@ export function mountUnionRaid(hosts: UnionHosts, deps: UnionDeps): UnionHandle 
       return;
     }
     const card = el('section', 'union-plan-card');
+    const planOutput = el('div');
+    const invalidateRaidPlan = () => {
+      raidPlannerWorker?.terminate(); raidPlannerWorker = undefined;
+      raidPlan = undefined;
+      // 只移除舊方案及其匯出按鈕，保留血量欄位與目前輸入焦點。
+      planOutput.replaceChildren();
+      stop.hidden = true; solve.disabled = false;
+      status.textContent = '血量已變更，請重新計算全聯盟最優出刀。';
+    };
     card.append(el('h4', undefined, '全聯盟最優出刀'));
     card.append(el('p', 'field-note', '使用目前所有有效模擬結果；每位成員最多三刀且角色不得重複。擊殺溢傷不跨血條，五王全清才進下一階段，第三階段全清後剩餘刀投入無限五王。血量單位為億。'));
 
@@ -2701,10 +2710,16 @@ export function mountUnionRaid(hosts: UnionHosts, deps: UnionDeps): UnionHandle 
       phase.forEach((value, bossIndex) => {
         const td = el('td'); const input = el('input'); input.type = 'number'; input.min = '0.01'; input.step = '0.01';
         input.value = String(value); input.ariaLabel = `第 ${phaseIndex + 1} 階段 Boss ${bossIndex + 1} 血量（億）`;
+        input.addEventListener('input', () => {
+          // 輸入尚未失焦前先取消舊工作，避免回傳結果重繪並覆蓋正在輸入的值。
+          if (Number(input.value) !== raidHealth[phaseIndex]![bossIndex]) invalidateRaidPlan();
+        });
         input.addEventListener('change', () => {
           const next = Number(input.value);
           if (!Number.isFinite(next) || next <= 0) { input.value = String(raidHealth[phaseIndex]![bossIndex]); return; }
-          raidHealth[phaseIndex]![bossIndex] = next; raidPlan = undefined;
+          if (next === raidHealth[phaseIndex]![bossIndex]) return;
+          raidHealth[phaseIndex]![bossIndex] = next;
+          invalidateRaidPlan();
           try { localStorage.setItem(raidHealthKey, JSON.stringify(raidHealth)); } catch { /* Optional preference. */ }
         });
         td.append(input); row.append(td);
@@ -2749,6 +2764,7 @@ export function mountUnionRaid(hosts: UnionHosts, deps: UnionDeps): UnionHandle 
       const candidates = plannerCandidates(results);
       if (!candidates.length) { status.textContent = '沒有成功完成的五人模擬結果。'; return; }
       solve.disabled = true; stop.hidden = false; status.textContent = '正在載入最佳化解算器…'; raidPlan = undefined;
+      planOutput.replaceChildren();
       const worker = new Worker(new URL('./union-planner.worker.ts', import.meta.url), { type: 'module' });
       raidPlannerWorker = worker;
       worker.addEventListener('message', (event: MessageEvent<{ kind: string; message?: string; plan?: RaidPlannerPlan }>) => {
@@ -2785,12 +2801,12 @@ export function mountUnionRaid(hosts: UnionHosts, deps: UnionDeps): UnionHandle 
       ]) {
         const box = el('div', 'union-plan-kpi'); box.append(el('span', undefined, label), el('b', undefined, value)); summary.append(box);
       }
-      card.append(summary);
-      card.append(el('p', 'field-note', plan.provenOptimal
+      planOutput.append(summary);
+      planOutput.append(el('p', 'field-note', plan.provenOptimal
         ? `HiGHS 已證明此候選範圍內為最優解。有限血條有效傷害 ${yi(plan.effectiveFiniteDamage)}${plan.endlessDamage ? `；無限五王 ${yi(plan.endlessDamage)}` : ''}。`
         : `解算器達到時間限制，以下是目前最佳可行解，尚未證明全域最優。有限血條有效傷害 ${yi(plan.effectiveFiniteDamage)}。`));
-      if (unavailable.length) card.append(el('p', 'union-error', `沒有有效模擬結果，未納入：${unavailable.join('、')}`));
-      if (short.length) card.append(el('p', 'union-error', `有效互斥隊伍不足三刀：${short.map(member => `${member.memberName}（${member.capacity}）`).join('、')}`));
+      if (unavailable.length) planOutput.append(el('p', 'union-error', `沒有有效模擬結果，未納入：${unavailable.join('、')}`));
+      if (short.length) planOutput.append(el('p', 'union-error', `有效互斥隊伍不足三刀：${short.map(member => `${member.memberName}（${member.capacity}）`).join('、')}`));
 
       const maxPhase = plan.reached === 'endless' ? 3 : Number(plan.reached.at(-1)) - 1;
       for (let phase = 0; phase <= maxPhase; phase++) {
@@ -2812,7 +2828,7 @@ export function mountUnionRaid(hosts: UnionHosts, deps: UnionDeps): UnionHandle 
           });
           section.append(block);
         }
-        card.append(section);
+        planOutput.append(section);
       }
 
       const membersBox = el('details', 'union-plan-members');
@@ -2828,16 +2844,18 @@ export function mountUnionRaid(hosts: UnionHosts, deps: UnionDeps): UnionHandle 
         }
         table.append(row);
       }
-      membersBox.append(table); card.append(membersBox);
+      membersBox.append(table); planOutput.append(membersBox);
       const save = el('button', 'roster-import', '下載最優出刀 CSV'); save.type = 'button';
       save.addEventListener('click', () => {
+        if (raidPlan !== plan) return;
         const url = URL.createObjectURL(new Blob([planCsv(plan)], { type: 'text/csv;charset=utf-8' }));
         const link = document.createElement('a'); link.href = url;
         link.download = `聯盟戰最優出刀_${new Date().toISOString().slice(0, 10)}.csv`; link.click();
         setTimeout(() => URL.revokeObjectURL(url), 60_000);
       });
-      card.append(save);
+      planOutput.append(save);
     }
+    card.append(planOutput);
     raidPlannerBox.append(card);
   }
 

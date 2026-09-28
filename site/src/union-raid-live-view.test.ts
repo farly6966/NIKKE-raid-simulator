@@ -32,6 +32,11 @@ const candidate: RaidPlannerCandidate = {
   damage: 60 * RAID_DAMAGE_SCALE,
 };
 
+const enterDamage = (container: ParentNode, value = String(candidate.damage / 100_000_000)): void => {
+  const input = container.querySelector<HTMLInputElement>('.live-damage-input')!;
+  input.value = value; input.dispatchEvent(new Event('input', { bubbles: true }));
+};
+
 const group = calibrationGroupKey(candidate)!;
 const saved = (): LiveStored => JSON.parse(localStorage.getItem(LIVE_SESSION_KEY)!);
 const clickText = (panel: HTMLElement, text: string): void => {
@@ -161,7 +166,8 @@ describe('實戰進度保存與補救', () => {
   it('儲存失敗會持續提醒，仍能匯出記憶體中的最新進度', async () => {
     seed(); const previous = localStorage.getItem(LIVE_SESSION_KEY);
     vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('quota'); });
-    const panel = mount(); panel.querySelector<HTMLButtonElement>('.live-quick-confirm button')!.click();
+    const panel = mount(); enterDamage(panel.querySelector('.live-quick-confirm')!);
+    panel.querySelector<HTMLButtonElement>('.live-quick-confirm button')!.click();
     expect(panel.textContent).toContain('尚未存入此瀏覽器');
     expect(localStorage.getItem(LIVE_SESSION_KEY)).toBe(previous);
     expect(await exportData(panel)).toMatchObject({ fired: [expect.anything(), expect.anything()] });
@@ -175,6 +181,7 @@ describe('實戰進度保存與補救', () => {
     clickText(panel, '取消操作'); expect(saved().current.fired).toHaveLength(0);
     panel.querySelector<HTMLButtonElement>('.live-quick-confirm button')!.click();
     const oldConfirm = [...panel.querySelectorAll('button')].find(b => b.textContent === '確認傷害無誤')!;
+    enterDamage(panel.querySelector('.live-recorder-card')!);
     panel.querySelector<HTMLButtonElement>('.live-recorder-controls button')!.click();
     oldConfirm.click(); expect(saved().current.fired).toHaveLength(1);
     expect(saved().current.fired[0]!.damage).toBe(candidate.damage);
@@ -298,9 +305,12 @@ describe('optional calibration lifecycle', () => {
   it('uses calibrated estimates in manual and pending forms, retaining both snapshots', () => {
     const panel = setup(true, { [group]: 0.5 });
     expect(FakeWorker.instances.at(-1)!.input!.candidates[0]!.damage).toBe(candidate.damage * 0.5);
-    expect(panel.querySelector<HTMLInputElement>('.live-recorder-card .live-damage-input')!.value).toBe('0.03');
-    expect(panel.querySelector<HTMLInputElement>('.live-shot-row.is-pending .live-damage-input')!.value).toBe('0.03');
+    expect(panel.querySelector<HTMLInputElement>('.live-recorder-card .live-damage-input')!.value).toBe('');
+    expect(panel.querySelector<HTMLInputElement>('.live-shot-row.is-pending .live-damage-input')!.value).toBe('');
+    expect(panel.querySelector('.live-recorder-card')!.textContent).toContain('預估 0.03 億');
+    expect(panel.querySelector('.live-shot-row.is-pending')!.textContent).toContain('預估 0.03 億');
     const card = panel.querySelector<HTMLElement>('.live-recorder-card')!;
+    enterDamage(card, '0.03');
     card.querySelector<HTMLInputElement>('.live-sample-verification input')!.checked = true;
     card.querySelector<HTMLButtonElement>('.live-recorder-controls button')!.click();
     const fired = JSON.parse(localStorage.getItem(LIVE_SESSION_KEY) ?? 'null') ? saved().current.fired : JSON.parse(localStorage.getItem('nikke-live-raid-fired-v1')!);
@@ -309,10 +319,10 @@ describe('optional calibration lifecycle', () => {
     expect(saved().current.base.candidates[0]!.damage).toBe(candidate.damage);
   });
 
-  it('never includes an untouched prefilled value but accepts an explicitly verified complete finisher', () => {
+  it('rejects untouched actual damage but accepts an explicitly verified complete finisher', () => {
     let panel = setup();
     panel.querySelector<HTMLButtonElement>('.live-quick-confirm button')!.click();
-    expect(saved().current.fired[0]!.calibrationSample).toBe('unreviewed');
+    expect(saved().current.fired).toHaveLength(0);
     localStorage.removeItem(LIVE_SESSION_KEY);
     localStorage.setItem('nikke-live-raid-fired-v1', '[]');
     panel = setup();
@@ -331,6 +341,7 @@ describe('optional calibration lifecycle', () => {
 
   it('asks for finisher classification and supports reversible full-output and overflow decisions', () => {
     seedTrend(); const panel = setup();
+    enterDamage(panel.querySelector('.live-quick-confirm')!);
     panel.querySelector<HTMLButtonElement>('.live-quick-confirm button')!.click();
     expect(panel.textContent).toContain('1 筆收尾待確認');
     expect(panel.textContent).toContain('有效樣本 5 刀');
@@ -389,6 +400,7 @@ describe('optional calibration lifecycle', () => {
   it('cancels stale preview results when a new shot is recorded', () => {
     seedTrend(); const panel = setup();
     clickText(panel, '預覽校正與重排'); const oldPreview = FakeWorker.instances.at(-1)!;
+    enterDamage(panel.querySelector('.live-quick-confirm')!);
     panel.querySelector<HTMLButtonElement>('.live-quick-confirm button')!.click();
     oldPreview.emit({ kind: 'done', plan: plan(false) });
     expect(panel.querySelector('.live-calibration-preview')).toBeNull();
@@ -464,6 +476,7 @@ describe('live raid confirmed-state rendering', () => {
     mountLiveRaid({ panel }, { imageOf: () => undefined, labelOf: name => name });
     FakeWorker.instances[0]!.emit({ kind: 'done', plan: plan(false) });
 
+    enterDamage(panel.querySelector('.live-recorder-card')!);
     panel.querySelector<HTMLButtonElement>('.live-recorder-card button')!.click();
     const fired = saved().current.fired as unknown[];
     expect(fired).toHaveLength(1);
@@ -487,6 +500,7 @@ describe('live raid confirmed-state rendering', () => {
     mountLiveRaid({ panel }, { imageOf: () => undefined, labelOf: name => name });
     FakeWorker.instances[0]!.emit({ kind: 'done', plan: plan(false) });
 
+    enterDamage(panel.querySelector('.live-shot-row.is-pending')!);
     panel.querySelector<HTMLButtonElement>('.live-shot-row.is-pending button')!.click();
     FakeWorker.instances[1]!.emit({ kind: 'error', message: '沒有可用的完整模擬結果。' });
     panel.querySelector<HTMLButtonElement>('.live-shot-row.is-pending button')?.click();
@@ -531,9 +545,10 @@ describe('live raid confirmed-state rendering', () => {
     expect(options[1]!.textContent).toContain('水冷隊');
     options[1]!.click();
     expect(options[1]!.getAttribute('aria-checked')).toBe('true');
-    expect(pending.querySelector<HTMLInputElement>('.live-damage-input')!.value).toBe('45.00');
+    expect(pending.querySelector<HTMLInputElement>('.live-damage-input')!.value).toBe('');
     expect(pending.querySelector('.live-shot-preview')!.textContent).toContain('水冷隊');
 
+    enterDamage(pending, '45');
     pending.querySelector<HTMLButtonElement>(':scope > button')!.click();
     const fired = saved().current.fired as Array<{ deckIndex: number; deckLabel?: string }>;
     expect(fired).toEqual([expect.objectContaining({ deckIndex: 1, deckLabel: '水冷隊' })]);
@@ -556,12 +571,13 @@ describe('live raid confirmed-state rendering', () => {
     FakeWorker.instances[0]!.emit({ kind: 'done', plan: planned });
 
     const card = panel.querySelector<HTMLElement>('.live-recorder-card')!;
-    expect(card.querySelector<HTMLInputElement>('.live-damage-input')!.value).toBe('45.00');
+    expect(card.querySelector<HTMLInputElement>('.live-damage-input')!.value).toBe('');
     const picked = card.querySelector<HTMLButtonElement>('.live-team-option[aria-checked="true"]')!;
     expect(picked.textContent).toContain('水冷隊');
     expect(picked.classList.contains('is-suggested')).toBe(true);
     expect(card.querySelector('select[aria-label="實際出刀成員"]')!.textContent).toContain('建議');
 
+    enterDamage(card, '45');
     card.querySelector<HTMLButtonElement>('.live-recorder-controls button')!.click();
     const fired = saved().current.fired as Array<{ deckIndex: number }>;
     expect(fired).toEqual([expect.objectContaining({ deckIndex: 1 })]);
@@ -574,7 +590,7 @@ describe('live raid confirmed-state rendering', () => {
 
     const quick = panel.querySelector<HTMLElement>('.live-recommendation .live-quick-confirm')!;
     expect(quick.querySelector<HTMLInputElement>('.live-damage-input')!.value)
-      .toBe((candidate.damage / 100_000_000).toFixed(2));
+      .toBe('');
     quick.querySelector<HTMLInputElement>('.live-damage-input')!.value = '58.5';
     quick.querySelector<HTMLButtonElement>('button')!.click();
     clickText(panel, '確認傷害無誤');
@@ -628,6 +644,7 @@ describe('live raid confirmed-state rendering', () => {
     const panel = host();
     mountLiveRaid({ panel }, { imageOf: () => undefined, labelOf: name => name });
     FakeWorker.instances[0]!.emit({ kind: 'done', plan: plan(false) });
+    enterDamage(panel.querySelector('.live-quick-confirm')!);
     panel.querySelector<HTMLElement>('.live-recommendation .live-quick-confirm button')!.click();
 
     const card = panel.querySelector<HTMLElement>('.live-member-card')!;
@@ -649,8 +666,143 @@ describe('live raid confirmed-state rendering', () => {
     const options = [...card.querySelectorAll<HTMLButtonElement>('.live-team-option')];
     expect(options).toHaveLength(2);
     options[1]!.click();
+    enterDamage(card, String(second.damage / 100_000_000));
     card.querySelector<HTMLButtonElement>('.live-recorder-controls button')!.click();
     const fired = saved().current.fired as Array<{ deckIndex: number }>;
     expect(fired).toEqual([expect.objectContaining({ deckIndex: 1 })]);
+  });
+});
+
+describe('實際出刀防呆與重算草稿', () => {
+  const YI = 100_000_000;
+  const first = { ...candidate, damage: 40 * YI };
+  const second = { ...first, id: 1, memberId: 'm1', memberName: '另一位成員' };
+  const alternate = { ...second, id: 2, deckIndex: 1, squad: ['角色F', '角色G', '角色H', '角色I', '角色J'] };
+  const otherBoss = { ...second, id: 3, bossIndex: 1, bossName: '二王' };
+  const otherBossAlternate = { ...alternate, id: 4, bossIndex: 1, bossName: '二王' };
+  const prepared = { ...base, candidates: [first, second, alternate, otherBoss, otherBossAlternate] };
+  const finish = (worker = FakeWorker.instances.at(-1)!): void => worker.emit({ kind: 'done', plan: plan(false) });
+  const mount = (ready = true): HTMLElement => {
+    localStorage.setItem('nikke-live-raid-base-v1', JSON.stringify(prepared));
+    localStorage.setItem('nikke-live-raid-calibration-v1', JSON.stringify({ enabled: true, factors: {} }));
+    const panel = host(); mountLiveRaid({ panel }, { imageOf: () => undefined, labelOf: name => name });
+    if (ready) finish();
+    return panel;
+  };
+  const select = (panel: ParentNode, label: string, value: string): void => {
+    const control = panel.querySelector<HTMLSelectElement>(`select[aria-label="${label}"]`)!;
+    control.value = value; control.dispatchEvent(new Event('change'));
+  };
+  const verify = (container: ParentNode): void => {
+    const control = container.querySelector<HTMLInputElement>('.live-sample-verification input')!;
+    control.checked = true; control.dispatchEvent(new Event('change'));
+  };
+
+  it.each([
+    ['.live-recorder-card', '.live-recorder-controls button'],
+    ['.live-quick-confirm', 'button'],
+    ['.live-shot-row.is-pending', ':scope > button'],
+  ])('%s 的實際傷害初始空白，拒絕空值和零，輸入後才記錄', (scope, button) => {
+    const panel = mount();
+    const container = panel.querySelector<HTMLElement>(scope)!;
+    const input = container.querySelector<HTMLInputElement>('.live-damage-input')!;
+    expect(input.value).toBe('');
+    container.querySelector<HTMLButtonElement>(button)!.click();
+    expect(saved().current.fired).toHaveLength(0);
+    enterDamage(container, '0'); container.querySelector<HTMLButtonElement>(button)!.click();
+    expect(saved().current.fired).toHaveLength(0);
+    enterDamage(container, '38'); container.querySelector<HTMLButtonElement>(button)!.click();
+    expect(saved().current.fired).toEqual([expect.objectContaining({ damage: 38 * YI, calibrationSample: 'unreviewed' })]);
+  });
+
+  it('背景重算保留手動選的王、成員、隊伍、傷害、核對及正在輸入的焦點', () => {
+    const panel = mount(false);
+    select(panel, '實際攻擊 Boss', '1'); select(panel, '實際出刀成員', 'm1');
+    let recorder = panel.querySelector<HTMLElement>('.live-recorder-card')!;
+    recorder.querySelector<HTMLButtonElement>('[data-deck-index="1"]')!.click();
+    enterDamage(recorder, '37.25'); verify(recorder);
+    recorder.querySelector<HTMLInputElement>('.live-damage-input')!.focus();
+    finish();
+    recorder = panel.querySelector<HTMLElement>('.live-recorder-card')!;
+    expect(recorder.querySelector<HTMLSelectElement>('[aria-label="實際攻擊 Boss"]')!.value).toBe('1');
+    expect(recorder.querySelector<HTMLSelectElement>('[aria-label="實際出刀成員"]')!.value).toBe('m1');
+    expect(recorder.querySelector('[data-deck-index="1"]')!.getAttribute('aria-checked')).toBe('true');
+    const restored = recorder.querySelector<HTMLInputElement>('.live-damage-input')!;
+    expect(restored.value).toBe('37.25'); expect(document.activeElement).toBe(restored);
+    expect(recorder.querySelector<HTMLInputElement>('.live-sample-verification input')!.checked).toBe(true);
+    recorder.querySelector<HTMLButtonElement>('.live-recorder-controls button')!.click();
+    expect(saved().current.fired[0]).toMatchObject({ memberId: 'm1', bossIndex: 1, deckIndex: 1, damage: 37.25 * YI, calibrationSample: 'verified' });
+    expect(panel.querySelector<HTMLInputElement>('.live-recorder-card .live-damage-input')!.value).toBe('');
+  });
+
+  it('切換出刀對象會清除傷害與核對，重點同一隊伍則保留', () => {
+    const panel = mount(); let recorder = panel.querySelector<HTMLElement>('.live-recorder-card')!;
+    enterDamage(recorder, '37'); verify(recorder);
+    select(panel, '實際出刀成員', 'm1');
+    expect(recorder.querySelector<HTMLInputElement>('.live-damage-input')!.value).toBe('');
+    expect(recorder.querySelector<HTMLInputElement>('.live-sample-verification input')!.checked).toBe(false);
+    enterDamage(recorder, '38'); verify(recorder);
+    recorder.querySelector<HTMLButtonElement>('[data-deck-index="0"]')!.click();
+    expect(recorder.querySelector<HTMLInputElement>('.live-damage-input')!.value).toBe('38');
+    recorder.querySelector<HTMLButtonElement>('[data-deck-index="1"]')!.click();
+    expect(recorder.querySelector<HTMLInputElement>('.live-damage-input')!.value).toBe('');
+    expect(recorder.querySelector<HTMLInputElement>('.live-sample-verification input')!.checked).toBe(false);
+    enterDamage(recorder, '39'); verify(recorder);
+    select(panel, '實際攻擊 Boss', '1');
+    expect(recorder.querySelector<HTMLInputElement>('.live-damage-input')!.value).toBe('');
+    expect(recorder.querySelector<HTMLInputElement>('.live-sample-verification input')!.checked).toBe(false);
+  });
+
+  it.each(['.live-quick-confirm', '.live-shot-row.is-pending'])('%s 草稿重繪後仍屬同一候選，含焦點及核對狀態', (scope) => {
+    const panel = mount();
+    let container = panel.querySelector<HTMLElement>(scope)!;
+    enterDamage(container, '38'); verify(container);
+    container.querySelector<HTMLInputElement>('.live-damage-input')!.focus();
+    // 切換校正會重新排刀，先移除建議；回傳後同一候選的草稿仍應存在。
+    panel.querySelector<HTMLInputElement>('[role="switch"]')!.click();
+    finish();
+    container = panel.querySelector<HTMLElement>(scope)!;
+    expect(container.querySelector<HTMLInputElement>('.live-damage-input')!.value).toBe('38');
+    panel.querySelector<HTMLInputElement>('[role="switch"]')!.click(); finish();
+    container = panel.querySelector<HTMLElement>(scope)!;
+    expect(container.querySelector<HTMLInputElement>('.live-sample-verification input')!.checked).toBe(true);
+    // 保留中的欄位仍在重繪前時，焦點要回到同一欄；不可跳到其他候選。
+    container.querySelector<HTMLInputElement>('.live-damage-input')!.focus();
+    panel.querySelector<HTMLInputElement>('[role="switch"]')!.click();
+    expect(document.activeElement).not.toBe(panel.querySelector('.live-recorder-card .live-damage-input'));
+  });
+
+  it('建議換成其他候選時，不沿用舊建議的傷害或核對', () => {
+    const panel = mount();
+    enterDamage(panel.querySelector('.live-quick-confirm')!, '38'); verify(panel.querySelector('.live-quick-confirm')!);
+    panel.querySelector<HTMLInputElement>('[role="switch"]')!.click();
+    const next = plan(false); next.bars[0]!.shots[0] = { ...second, phase: 0, effectiveDamage: second.damage, remainingAfter: 0 };
+    FakeWorker.instances.at(-1)!.emit({ kind: 'done', plan: next });
+    expect(panel.querySelector<HTMLInputElement>('.live-quick-confirm .live-damage-input')!.value).toBe('');
+  });
+
+  it.each(['message', 'event', 'construct', 'start'])('解算器 %s 失敗顯示可重試狀態並保留草稿', (failure) => {
+    const panel = mount(false); let recorder = panel.querySelector<HTMLElement>('.live-recorder-card')!;
+    enterDamage(recorder, '38'); recorder.querySelector<HTMLInputElement>('.live-damage-input')!.focus();
+    if (failure === 'message') FakeWorker.instances.at(-1)!.emit({ kind: 'error', message: '解算器不可用' });
+    else if (failure === 'event') FakeWorker.instances.at(-1)!.dispatchEvent(new ErrorEvent('error', { message: '解算器不可用' }));
+    else {
+      if (failure === 'construct') vi.stubGlobal('Worker', class { constructor() { throw new Error('無法建立'); } });
+      else vi.spyOn(FakeWorker.prototype, 'postMessage').mockImplementation(() => { throw new Error('無法啟動'); });
+      panel.querySelector<HTMLInputElement>('[role="switch"]')!.click();
+    }
+    expect(panel.textContent).toContain('計算失敗，請重試');
+    expect(panel.textContent).toContain('重算失敗');
+    expect(panel.textContent).not.toContain('正在計算');
+    recorder = panel.querySelector<HTMLElement>('.live-recorder-card')!;
+    expect(recorder.querySelector<HTMLInputElement>('.live-damage-input')!.value).toBe('38');
+    expect(document.activeElement).toBe(recorder.querySelector('.live-damage-input'));
+    vi.restoreAllMocks(); vi.stubGlobal('Worker', FakeWorker);
+    const count = FakeWorker.instances.length;
+    clickText(panel, '重新計算');
+    expect(FakeWorker.instances).toHaveLength(count + 1);
+    expect(panel.textContent).toContain('正在計算');
+    finish(); expect(panel.textContent).toContain('建議已更新');
+    expect([...panel.querySelectorAll('button')].find(button => button.textContent === '重新計算')!.hidden).toBe(true);
   });
 });
