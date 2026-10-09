@@ -442,13 +442,15 @@ def burst_stage(name: str) -> str:
 
 
 def _when_ok(name: str, cond: dict, members: list[str]) -> bool:
-    """레이어 기본값(버스트 패턴·조건부 컨트롤)의 적용 조건. 지원하는 키는 아래 넷.
+    """레이어 기본값(버스트 패턴·조건부 컨트롤)의 적용 조건. 지원하는 키는 아래 다섯.
 
     `same_stage_cd_max: N` — **같은 버스트 단계에 쿨타임 N초 이하인 다른 멤버가 있을 때만.**
     마스트 : 로망틱 메이드의 "3의 배수"가 20초 쿨 2버와 함께일 때만 성립하는 걸 표현한다.
     `same_stage_other: true` — 같은 단계에 **다른 멤버가 하나라도 있을 때만.** 자기가 그
     단계의 유일한 멤버면 패턴(특히 "안 씀")을 걸어봐야 의미가 없으므로 아예 떼어낸다.
     `with_member: [이름...]` — 목록 중 **하나라도 스쿼드에 있을 때만.**
+    `without_member: [이름...]` — 清單中**沒有任何一人**在隊伍裡時才成立。同一個操作兩個人各做
+    一次會互相抵銷時，只讓一邊做（森：疾速兔女郎 ← 吉爾提：神力兔女郎 的模式切換長按）。
     `position: N` — 스쿼드 배치 순서가 N번째일 때만 (1 = 가장 왼쪽).
 
     조건이 안 맞으면 패턴을 걸지 않는다 — 그 조합에서는 평소 순서(왼쪽부터)가 맞다.
@@ -464,6 +466,8 @@ def _when_ok(name: str, cond: dict, members: list[str]) -> bool:
             ok = bool(_same_stage_others(name, members)) == bool(val)
         elif key == "with_member":
             ok = any(m in members for m in val)
+        elif key == "without_member":
+            ok = not any(m in members for m in val)
         elif key == "position":
             ok = name in members and members.index(name) + 1 == val
         else:

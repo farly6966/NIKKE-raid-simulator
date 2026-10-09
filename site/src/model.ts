@@ -207,7 +207,7 @@ export function validateRequest(request: SimulationRequest): string[] {
   ];
   if ((request.bossPhases?.length ?? 0) > 64) errors.push('Boss 區間最多 64 個。');
   for (const phase of request.bossPhases ?? []) {
-    if (!['parts', 'immune', 'element_gate', 'core', 'optimal_range', 'pierce_gate'].includes(phase.kind)) errors.push('Boss 區間種類不正確。');
+    if (!['parts', 'immune', 'element_gate', 'core', 'optimal_range', 'pierce_gate', 'vanish'].includes(phase.kind)) errors.push('Boss 區間種類不正確。');
     if (phase.kind === 'optimal_range' && phase.weapons?.some(w => !['AR', 'SMG', 'SG', 'MG', 'SR', 'RL'].includes(w))) errors.push('Boss 適正武器不正確。');
   }
   for (const [w, label] of windows) {

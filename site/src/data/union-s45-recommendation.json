@@ -1,0 +1,478 @@
+{
+  "code": "9c6mt9",
+  "source": "https://dildoro.com/ 推薦頭目設定（聯盟）— 아카라이브 니케 채널 https://arca.live/b/nikketgv/184740241",
+  "verified": "2026-10-09",
+  "cfg": {
+    "v": 1,
+    "mode": "union",
+    "kind": "season_bosses",
+    "duration": 180,
+    "bosses": {
+      "전격": {
+        "def": 11607,
+        "core_px": 25,
+        "has_parts": false,
+        "part_break_interval": 0,
+        "max_burst_count": 0,
+        "first_burst_time": 3,
+        "burst_switch_delay": 0.1,
+        "burst_reenter_delay": 0.5,
+        "optimal_range_weapons": [
+          "SR"
+        ],
+        "phases": [
+          {
+            "kind": "core",
+            "t0": 0,
+            "t1": 180
+          }
+        ],
+        "weapon_coeff": {
+          "AR": 1,
+          "SMG": 0.8,
+          "SG": 0.9,
+          "SR": 1,
+          "RL": 1,
+          "MG": 1
+        },
+        "boss_stages": []
+      },
+      "수냉": {
+        "def": 12181,
+        "core_px": 0,
+        "has_parts": false,
+        "part_break_interval": 0,
+        "max_burst_count": 0,
+        "first_burst_time": 3,
+        "burst_switch_delay": 0.1,
+        "burst_reenter_delay": 0.5,
+        "optimal_range_weapons": [],
+        "phases": [
+          {
+            "kind": "parts",
+            "t0": 0,
+            "t1": 4
+          },
+          {
+            "kind": "parts",
+            "t0": 19,
+            "t1": 24
+          },
+          {
+            "kind": "parts",
+            "t0": 26,
+            "t1": 28
+          },
+          {
+            "kind": "parts",
+            "t0": 39,
+            "t1": 44
+          },
+          {
+            "kind": "element_gate",
+            "t0": 52,
+            "t1": 54
+          },
+          {
+            "kind": "immune",
+            "t0": 64,
+            "t1": 66
+          },
+          {
+            "kind": "parts",
+            "t0": 81,
+            "t1": 83
+          },
+          {
+            "kind": "element_gate",
+            "t0": 108,
+            "t1": 110
+          },
+          {
+            "kind": "parts",
+            "t0": 131,
+            "t1": 134
+          },
+          {
+            "kind": "parts",
+            "t0": 136,
+            "t1": 139
+          },
+          {
+            "kind": "element_gate",
+            "t0": 149,
+            "t1": 151
+          },
+          {
+            "kind": "parts",
+            "t0": 161,
+            "t1": 164
+          }
+        ],
+        "weapon_coeff": {
+          "AR": 1,
+          "SMG": 1,
+          "SG": 1,
+          "SR": 1,
+          "RL": 1,
+          "MG": 1
+        },
+        "boss_stages": []
+      },
+      "작열": {
+        "def": 11607,
+        "core_px": 60,
+        "has_parts": false,
+        "part_break_interval": 0,
+        "max_burst_count": 0,
+        "first_burst_time": 3,
+        "burst_switch_delay": 0.1,
+        "burst_reenter_delay": 0.5,
+        "optimal_range_weapons": [
+          "MG",
+          "SR"
+        ],
+        "phases": [
+          {
+            "kind": "core",
+            "t0": 0,
+            "t1": 180
+          },
+          {
+            "kind": "vanish",
+            "t0": 0.5,
+            "t1": 1.5
+          },
+          {
+            "kind": "vanish",
+            "t0": 17.9,
+            "t1": 19.2
+          },
+          {
+            "kind": "vanish",
+            "t0": 52.5,
+            "t1": 53.5
+          },
+          {
+            "kind": "vanish",
+            "t0": 59.6,
+            "t1": 60.7
+          },
+          {
+            "kind": "vanish",
+            "t0": 65.4,
+            "t1": 66.4
+          },
+          {
+            "kind": "vanish",
+            "t0": 71.1,
+            "t1": 72.1
+          },
+          {
+            "kind": "vanish",
+            "t0": 78,
+            "t1": 79.1
+          },
+          {
+            "kind": "vanish",
+            "t0": 104.3,
+            "t1": 105.3
+          },
+          {
+            "kind": "vanish",
+            "t0": 121.7,
+            "t1": 122.7
+          },
+          {
+            "kind": "vanish",
+            "t0": 134,
+            "t1": 134.9
+          },
+          {
+            "kind": "vanish",
+            "t0": 141.2,
+            "t1": 142.2
+          },
+          {
+            "kind": "vanish",
+            "t0": 146.9,
+            "t1": 147.9
+          },
+          {
+            "kind": "vanish",
+            "t0": 152.5,
+            "t1": 153.5
+          },
+          {
+            "kind": "vanish",
+            "t0": 159.4,
+            "t1": 160.5
+          },
+          {
+            "kind": "vanish",
+            "t0": 168.2,
+            "t1": 169.3
+          }
+        ],
+        "weapon_coeff": {
+          "AR": 1,
+          "SMG": 1,
+          "SG": 0.9,
+          "SR": 1,
+          "RL": 1,
+          "MG": 1
+        },
+        "boss_stages": []
+      },
+      "풍압": {
+        "def": 11607,
+        "core_px": 50,
+        "has_parts": false,
+        "part_break_interval": 0,
+        "max_burst_count": 0,
+        "first_burst_time": 3,
+        "burst_switch_delay": 0.1,
+        "burst_reenter_delay": 0.5,
+        "optimal_range_weapons": [],
+        "phases": [
+          {
+            "kind": "core",
+            "t0": 0,
+            "t1": 35
+          },
+          {
+            "kind": "parts",
+            "t0": 0,
+            "t1": 3
+          },
+          {
+            "kind": "range",
+            "t0": 0,
+            "t1": 3,
+            "weapons": [
+              "SMG",
+              "SG"
+            ]
+          },
+          {
+            "kind": "vanish",
+            "t0": 2,
+            "t1": 3
+          },
+          {
+            "kind": "range",
+            "t0": 4,
+            "t1": 30,
+            "weapons": [
+              "AR"
+            ]
+          },
+          {
+            "kind": "vanish",
+            "t0": 29,
+            "t1": 30
+          },
+          {
+            "kind": "range",
+            "t0": 31,
+            "t1": 35,
+            "weapons": [
+              "AR",
+              "SMG"
+            ]
+          },
+          {
+            "kind": "core",
+            "t0": 58,
+            "t1": 108
+          },
+          {
+            "kind": "vanish",
+            "t0": 59,
+            "t1": 60
+          },
+          {
+            "kind": "parts",
+            "t0": 60,
+            "t1": 62
+          },
+          {
+            "kind": "range",
+            "t0": 63,
+            "t1": 101,
+            "weapons": [
+              "MG"
+            ]
+          },
+          {
+            "kind": "vanish",
+            "t0": 100,
+            "t1": 101
+          },
+          {
+            "kind": "range",
+            "t0": 102,
+            "t1": 106,
+            "weapons": [
+              "SMG",
+              "SG"
+            ]
+          },
+          {
+            "kind": "vanish",
+            "t0": 130,
+            "t1": 131
+          },
+          {
+            "kind": "core",
+            "t0": 131,
+            "t1": 180
+          },
+          {
+            "kind": "parts",
+            "t0": 131,
+            "t1": 133
+          },
+          {
+            "kind": "range",
+            "t0": 136,
+            "t1": 176,
+            "weapons": [
+              "AR",
+              "SMG"
+            ]
+          },
+          {
+            "kind": "range",
+            "t0": 176,
+            "t1": 180,
+            "weapons": [
+              "SMG",
+              "SG"
+            ]
+          }
+        ],
+        "weapon_coeff": {
+          "AR": 1,
+          "SMG": 0.8,
+          "SG": 0.9,
+          "SR": 1,
+          "RL": 1,
+          "MG": 1
+        },
+        "boss_stages": [
+          {
+            "t": 35,
+            "weapon_coeff": {
+              "AR": 1,
+              "SMG": 0.6,
+              "SG": 0.5,
+              "SR": 1,
+              "RL": 1,
+              "MG": 1
+            }
+          },
+          {
+            "t": 60,
+            "weapon_coeff": {
+              "AR": 1,
+              "SMG": 0.8,
+              "SG": 0.9,
+              "SR": 1,
+              "RL": 1,
+              "MG": 1
+            }
+          },
+          {
+            "t": 106,
+            "weapon_coeff": {
+              "AR": 1,
+              "SMG": 0.6,
+              "SG": 0.5,
+              "SR": 1,
+              "RL": 1,
+              "MG": 1
+            }
+          },
+          {
+            "t": 131,
+            "weapon_coeff": {
+              "AR": 1,
+              "SMG": 0.8,
+              "SG": 0.9,
+              "SR": 1,
+              "RL": 1,
+              "MG": 1
+            }
+          }
+        ]
+      },
+      "철갑": {
+        "def": 12181,
+        "core_px": 76,
+        "has_parts": false,
+        "part_break_interval": 0,
+        "max_burst_count": 0,
+        "first_burst_time": 3,
+        "burst_switch_delay": 0.1,
+        "burst_reenter_delay": 0.5,
+        "optimal_range_weapons": [
+          "SMG",
+          "AR"
+        ],
+        "phases": [
+          {
+            "kind": "parts",
+            "t0": 12,
+            "t1": 29
+          },
+          {
+            "kind": "core",
+            "t0": 13,
+            "t1": 29
+          },
+          {
+            "kind": "element_gate",
+            "t0": 23,
+            "t1": 25
+          },
+          {
+            "kind": "parts",
+            "t0": 38,
+            "t1": 48
+          },
+          {
+            "kind": "core",
+            "t0": 38,
+            "t1": 180
+          },
+          {
+            "kind": "immune",
+            "t0": 54,
+            "t1": 56
+          },
+          {
+            "kind": "element_gate",
+            "t0": 116,
+            "t1": 129
+          },
+          {
+            "kind": "element_gate",
+            "t0": 129,
+            "t1": 139
+          }
+        ],
+        "weapon_coeff": {
+          "AR": 1,
+          "SMG": 1,
+          "SG": 1,
+          "SR": 1,
+          "RL": 1,
+          "MG": 1
+        },
+        "boss_stages": []
+      }
+    },
+    "season": 1000045
+  }
+}

@@ -594,7 +594,7 @@ def run_request(raw: str) -> str:
             raise ValueError("보스 구간은 64개까지 입력할 수 있습니다")
         cleaned = []
         for phase in phases:
-            if not isinstance(phase, dict) or phase.get("kind") not in ("parts", "immune", "element_gate", "core", "optimal_range", "pierce_gate"):
+            if not isinstance(phase, dict) or phase.get("kind") not in ("parts", "immune", "element_gate", "core", "optimal_range", "pierce_gate", "vanish"):
                 raise ValueError("보스 구간 종류가 올바르지 않습니다")
             start, end = float(phase.get("from", -1)), float(phase.get("to", -1))
             if not (math.isfinite(start) and math.isfinite(end) and 0 <= start < end <= 180):
@@ -604,7 +604,9 @@ def run_request(raw: str) -> str:
                 weapons = phase.get("weapons", [])
                 if not isinstance(weapons, list) or any(w not in ("AR", "SMG", "SG", "MG", "SR", "RL") for w in weapons):
                     raise ValueError("適正距離區間的武器類型不正確")
-                cleaned[-1]["weapons"] = list(dict.fromkeys(weapons))
+                # RL 沒有適正距離 —— 舊分享碼可能帶著，這裡靜靜拿掉（與全程清單的
+                # `normalize_optimal_range` 同一個規約），不讓引擎替 RL 加上 ③ +30%。
+                cleaned[-1]["weapons"] = normalize_optimal_range(list(dict.fromkeys(weapons)))
         enemy["boss_phases"] = cleaned
     # 관통이 꿰뚫는 몸통·파츠 수. 보스 메이커가 그림에서 세어 넘긴다 — 안 주면
     # 몸통 하나(한 발 = 한 히트)라 기존 계산과 같다.

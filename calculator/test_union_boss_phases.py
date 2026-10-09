@@ -37,6 +37,30 @@ class UnionBossPhasesTest(unittest.TestCase):
         self.assertGreater(sum(result.char_total.values()), 0)
         self.assertTrue(all(ev.is_pierce or ev.hit_tag.startswith("pierce:") or ev.hit_tag == "pierce_damage" for ev in result.hits))
 
+    def test_vanish_blocks_only_normal_attacks_inside_its_window(self):
+        # 頭目消失（聯盟 S45 推薦設定新增）：普攻落空，技能傷害照常。
+        from calculator.boss_pattern import _is_normal
+        base = self.run_battle()
+        full = self.run_battle(boss_phases=[{"kind": "vanish", "from": 0, "to": 180}])
+        self.assertGreater(sum(full.char_total.values()), 0)
+        self.assertLess(sum(full.char_total.values()), sum(base.char_total.values()))
+        self.assertFalse(any(_is_normal(ev) for ev in full.hits))
+        part = self.run_battle(boss_phases=[{"kind": "vanish", "from": 5, "to": 10}])
+        self.assertFalse(any(_is_normal(ev) for ev in part.hits if 5 <= round(ev.t, 9) < 10))
+        self.assertTrue(any(_is_normal(ev) for ev in part.hits if round(ev.t, 9) < 5))
+        self.assertTrue(any(_is_normal(ev) for ev in part.hits if round(ev.t, 9) >= 10))
+
+    def test_rocket_launchers_are_rejected_from_optimal_range_lists(self):
+        # RL 沒有適正距離；收進清單會替 RL 普攻加上遊戲裡不存在的 ③ +30%（上游 f6bcbe9）。
+        with self.assertRaises(ValueError):
+            self.run_battle(optimal_range_weapons=["RL"])
+        with self.assertRaises(ValueError):
+            self.run_battle(boss_phases=[{"kind": "optimal_range", "from": 0, "to": 5, "weapons": ["RL"]}])
+        with self.assertRaises(ValueError):
+            self.run_battle(optimal_range_weapons=["Sg"])   # 不認得的名字同樣擋下
+        # 有適正距離的五種照常通過。
+        self.run_battle(optimal_range_weapons=["AR", "SMG", "SG", "MG", "SR"])
+
     def test_recommended_stage_delay_does_not_add_extra_reaction(self):
         squad = build_squad(self.NAMES)
         result = simulate(squad, config=build_config(squad, {

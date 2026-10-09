@@ -446,6 +446,22 @@ _TICK_EPS = 1e-6
 _TICK_NUDGE = 1e-4
 
 
+def _feather_interval(base: float, step_pct: float, n: int) -> float:
+    """新生羽翼（니어 페더）的攻擊週期 —— 每多一支，縮短基本週期的 `step_pct`%（**加算**）。
+
+    n 支時是 `base × (1 − step_pct/100 × (n−1))`。2026-10-09 依上游 9db2b71 從乘算
+    `base × 0.84^(n−1)` 改過來：實際帳號 180 秒對照（上游引 Moris-kr 的量測）愛因實測 26.42 億，
+    乘算只算出 54%、加算 105%；DILDORO 也在 2026-10-03 做了同方向的修正。
+    縮到 0 以下等於每幀都發射，視為資料寫錯，直接失敗。
+    """
+    left = 1.0 - step_pct / 100.0 * (n - 1)
+    if left <= 0.0:
+        raise ValueError(
+            f"니어 페더 공격 주기가 0 이하다(기본 {base}초, {n}기, 한 기당 −{step_pct}%) — "
+            f"feather_interval_step_pct나 슬롯 수를 확인한다")
+    return base * left
+
+
 # ── ActiveBuff ────────────────────────────────────────────────────────────
 
 _AB_SEQ = itertools.count()  # ActiveBuff 고유 번호 발급기 (uid 필드 참고)
@@ -1044,13 +1060,14 @@ class BuffManager:
             if not fid or not slots:
                 return
             base = float(eff.get("feather_interval_base", 8.0))
-            mult = float(eff.get("feather_interval_mult", 1.0))
+            step = float(eff.get("feather_interval_step_pct", 0.0))
             st = self.state.setdefault("feathers", {}).setdefault(caster, {})
             st[fid] = {
                 "expiry": [math.inf if float(d) < 0 else t + float(d) for d in slots],
-                "next_t": t + base * mult ** (len(slots) - 1),
+                # 全部存活時週期最短 —— 0 以下的檢查在這裡就做完了
+                "next_t": t + _feather_interval(base, step, len(slots)),
                 "base": base,
-                "mult": mult,
+                "step": step,
             }
             return
 
@@ -1210,6 +1227,7 @@ class BuffManager:
                 else:
                     # 중첩 가능 해로운 효과 범용 감소: 완전 제거 불가, 최소 1스택 유지
                     ab.stack = max(1, min(ab.stack + delta, cap))
+                self._drop_value_cache()
                 # 스택 변화를 buff_event_handler에 알려 UI 타임라인 갱신
                 if self._buff_event_handler and ab.effect.get("name"):
                     new_val = self._get_value(ab.effect, ab)
@@ -1232,6 +1250,40 @@ class BuffManager:
                     and any(tc in (ab.target_chars or []) for tc in target_chars)
                 )
             ]
+            return
+
+        # `remove_scope: "target"` —— 只從 `target` 解析出來的角色身上拿掉（上游 9b16333）。
+        # 掛在多人身上的實例只移除那個角色，沒有剩餘對象時實例才消失（與 `debuff_cleanse` 同形）。
+        # 同名狀態由各角色各自持有、但只有一邊該變的時候用 —— 用下面的全域移除會把搭檔的
+        # 模式也清掉，同步就斷了（吉爾提：神力兔女郎 · 森：疾速兔女郎的 `바니 모드`）。
+        if stat == "remove_named_buff" and eff.get("remove_scope") == "target":
+            target_name = eff.get("target_effect", "")
+            scope = set(self._resolve_target(eff.get("target", "self"), caster) or [])
+            hit = [ab for ab in self._by_name(target_name)
+                   if scope & set(ab.target_chars or [])]
+            if not hit:
+                return
+            ended = []
+            for ab in hit:
+                gone = [c for c in ab.target_chars if c in scope]
+                if self._buff_event_handler:
+                    for tgt in gone:
+                        self._buff_event_handler("expire", target_name, ab.caster, tgt, t, t)
+                ab.target_chars = [c for c in ab.target_chars if c not in scope]
+                if not ab.target_chars:
+                    ended.append(ab)
+            if ended:
+                ended_uids = {ab.uid for ab in ended}
+                self._active = [ab for ab in self._active if ab.uid not in ended_uids]
+                live = {id(ab.effect) for ab in self._active}
+                for ab in ended:
+                    if id(ab.effect) not in live:
+                        self._dot_timers.pop(id(ab.effect), None)
+                        self._instant_timers.pop(id(ab.effect), None)
+            self._invalidate_buffs_cache()   # 只有 `target_chars` 變少的實例，彙總也會變
+            # 與全域移除相同，走訪結束後才 emit —— 重入會改動 `_active`。
+            for ab in ended:
+                self.notify(f"event:state_end:{target_name}", t, ab.caster)
             return
 
         # remove_named_buff: 특정 name의 버프 즉시 제거 (_active + _dot_timers 모두)
@@ -1273,6 +1325,7 @@ class BuffManager:
                 if caster not in (ab.target_chars or []):
                     continue
                 ab.stack = max(0, ab.stack - reduce)
+                self._drop_value_cache()
                 if ab.stack <= 0:
                     to_remove.append(ab.uid)
             if to_remove:
@@ -1306,6 +1359,9 @@ class BuffManager:
                 )
                 cap = base_cap + add_cap
                 gauges[gauge_id] = min(new_val, cap)
+                # `gauge_above:`·`gauge_below:` 是每次查詢都會讀的條件 —— 量表一動，這一幀先算的值就舊了。
+                if gauges[gauge_id] != current:
+                    self._drop_value_cache()
             else:  # gauge_consume / gauge_consume_as_ammo
                 if val == -1.0:  # fixed_value: -1 = 전체 소모
                     consumed = current
@@ -1313,6 +1369,8 @@ class BuffManager:
                 else:
                     consumed = min(val, current)
                     gauges[gauge_id] = max(0.0, current - val)
+                if gauges[gauge_id] != current:
+                    self._drop_value_cache()
                 # gauge_consume_as_ammo: 실제 소모량만큼 squad_ammo_consume 이벤트 발생
                 if stat == "gauge_consume_as_ammo" and consumed > 0:
                     for _ in range(int(consumed)):
@@ -1345,6 +1403,7 @@ class BuffManager:
                     if not affected:
                         continue
                     ab.expires_at += val
+                    self._drop_value_cache()
                     # DoT는 틱 스케줄이 _dot_timers에 별도로 복사돼 있다. ActiveBuff만
                     # 늘리면 표시만 길어지고 실제 틱은 원래 시각에서 끊긴다.
                     # (사쿠라 : 블룸 인 서머 `피어나다 3` — 적측 `벚꽃잎` 유지 시간 ▲)
@@ -2007,7 +2066,12 @@ class BuffManager:
         """
         if eff.get("event_scope") != "recipients":
             return list(self.squad_names)
-        return [c for c in (targets or [caster]) if c in self.squad_names]
+        # 對象**已確定但是 0 人**時，沒有人收到 —— 不落到施放者身上，否則沒收到的狀態的
+        # 「套用時」觸發會在施放者身上多跑一次（兔女郎同步 —— `allies_with_buff:` 對象 0 人）。
+        # `None` 是延後解析、還不知道，照舊算施放者。（上游 9b16333）
+        if targets is None:
+            return [caster] if caster in self.squad_names else []
+        return [c for c in targets if c in self.squad_names]
 
     def charge_hold_thresholds(self, caster: str) -> list[tuple[float, str]]:
         """이 캐스터의 효과가 쓰는 `charge_hold:N` 임계값 목록 — `(값, 원문 표기)`.
@@ -2312,14 +2376,43 @@ class BuffManager:
                 # 회수는 양쪽 같다. 경계 처리는 tick()의 `limit` 참조.
                 duration = eff.get("duration")
                 expires = math.inf if duration is None or duration == -1 else t + duration
-                first_t = t if eff.get("tick_start") == "immediate" else t + tick_interval
+                max_stack = eff.get("max_stack", 1)
+                # **不疊層的持續傷害，名字就是實例**（上游 197e91a，使用者 2026-10-09 確認照上游）。
+                # 實例鍵原本是效果物件，所以用兩條路徑掛同一個狀態的效果（胡桃 `해킹` —— 命中 36 次·爆裂）
+                # 會在同一個敵人身上各跑各的，tick 進兩次。同一個施放者的同名 DoT 已經在跑時，
+                # 改為刷新那個實例，這次的對象併進去。`[N 중첩]` 的 DoT 與週期自動攻擊不適用。
+                if eff.get("stat") == "dot_damage" and max_stack == 1 and eff.get("name"):
+                    running = next((
+                        ab for ab in self._active
+                        if ab.caster == caster and ab.effect is not eff
+                        and ab.effect.get("name") == eff["name"]
+                        and ab.effect.get("stat") == "dot_damage"
+                        and ab.effect.get("max_stack", 1) == 1
+                        and id(ab.effect) in self._dot_timers
+                    ), None)
+                    if running is not None:
+                        own_raw = eff.get("target", "self")
+                        if (running.target_chars is not None and isinstance(own_raw, str)
+                                and not own_raw.startswith(_LAZY_RESOLVE_PREFIXES)):
+                            for tgt in self._resolve_target(own_raw, caster):
+                                if tgt not in running.target_chars:
+                                    running.target_chars.append(tgt)
+                        eff = running.effect
+                # **正在跑的持續傷害重新施加時，tick 節拍照舊、只刷新到期時間**（上游 129ace4）。
+                # 原本每次重新施加都把下一跳重排成「重新施加 +interval」，比節拍更密集地重掛的 DoT
+                # （吉兒 `산성탄 2`·胡桃 `해킹`·渡鴉 `쇼크웨이브`）tick 間隔被拉開而掉跳。
+                # 第一次施加（含到期後再掛）的首跳相位照舊是 type 1/2；週期自動攻擊不是持續傷害，也照舊。
+                running_timer = self._dot_timers.get(id(eff))
+                if eff.get("stat") == "dot_damage" and running_timer is not None:
+                    first_t = running_timer[1]
+                else:
+                    first_t = t if eff.get("tick_start") == "immediate" else t + tick_interval
                 self._dot_timers[id(eff)] = (caster, first_t, expires)
                 # DoT는 _active에도 등록해야 target_state/debuff_cleanse/remove_named_buff
                 # 등이 name·polarity 기준으로 조회할 수 있다.
                 raw_target = eff.get("target", "self")
                 lazy = isinstance(raw_target, str) and raw_target.startswith(_LAZY_RESOLVE_PREFIXES)
                 targets = None if lazy else self._resolve_target(raw_target, caster)
-                max_stack = eff.get("max_stack", 1)
                 existing = next(
                     (ab for ab in self._active if ab.effect is eff and ab.caster == caster), None
                 )
@@ -2334,6 +2427,7 @@ class BuffManager:
 
                 if existing:
                     # 재발동: 타이머 갱신은 위에서 됐으므로 스택/만료만 갱신
+                    self._drop_value_cache()
                     if max_stack == 1:
                         existing.expires_at = expires
                     elif scaling_ref and eff.get("scaling") == "stack_count":
@@ -2388,6 +2482,7 @@ class BuffManager:
                                    else last_t + duration)
                         ab.expires_at = expires
                         ab.stack = 0
+                        self._drop_value_cache()
                         # 주기 틱은 램프가 끝난 뒤 +interval부터 잇는다.
                         self._dot_timers[id(eff)] = (caster, last_t + tick_interval, expires)
             elif self._damage_handler:
@@ -2463,7 +2558,7 @@ class BuffManager:
 
         if existing:
             # 同一影格再次疊層或刷新時，先丟棄舊的傷害彙總；後續連鎖觸發必須看到新值。
-            self._buffs_cache.clear()
+            self._drop_value_cache()
             if max_stack == 1:
                 existing.activated_at = t
                 existing.expires_at = expires
@@ -2660,6 +2755,7 @@ class BuffManager:
                     if ab is None:
                         continue
                     ab.stack = stack
+                    self._drop_value_cache()
                     self._damage_handler(eff, caster, t)
 
         # ── 주기 대미지(tick_interval) — 만료 정리보다 **먼저** 처리한다 ──────
@@ -2703,7 +2799,7 @@ class BuffManager:
 
         # ── 소환체 주기 공격(feather_tick) ────────────────────────────────
         #
-        # DoT와 달리 주기가 고정이 아니다 — 생존 수 n에 대해 base × mult^(n-1)이고,
+        # DoT와 달리 주기가 고정이 아니다 — 살아 있는 페더가 많을수록 짧아지고(`_feather_interval`, 加算),
         # 다음 발사는 **직전 예약 시각 기준**으로 잡는다(프레임 양자화 드리프트 방지).
         # 히트 수는 timeline이 발사 시점에 `ref_count()`로 다시 읽는다.
         feathers = self.state.get("feathers")
@@ -2718,7 +2814,7 @@ class BuffManager:
                         st["next_t"] = None      # 전멸 — 재소환 전까지 정지
                         continue
                     self.notify("feather_tick", t, f_caster)
-                    st["next_t"] = nxt + st["base"] * st["mult"] ** (n - 1)
+                    st["next_t"] = nxt + _feather_interval(st["base"], st["step"], n)
 
         # 만료 버프 제거 + state_end 이벤트 발생
         expired_buffs = [ab for ab in self._active if t >= ab.expires_at]
@@ -2856,6 +2952,18 @@ class BuffManager:
                 del self._instant_timers[eid]
 
     # ── 버프 집계 ─────────────────────────────────────────────────────────
+
+    def _drop_value_cache(self):
+        """`_active` 的組成沒變、但查詢結果會變的時候，丟掉同一幀已經算好的彙總。
+
+        `_invalidate_buffs_cache()` 只在增益掛上／拿掉時跑。已經掛著的增益重新觸發、
+        層數增減、延長持續時間，或 `gauge_above:` 這類條件讀的量表動了，結果一樣會變 ——
+        不丟的話，同一幀先問的人拿到的**更新前的值**，後問的人也會拿到，傷害就取決於誰先問。
+        fork 在 `c782e17` 只補了 `_activate` 重新觸發那一處；其餘各處對應上游 a01402e
+        （2026-09-28，上游的做法是在快取鍵多放一個號碼，這裡沿用 fork 既有的「直接清掉」）。
+        執行計畫快取照用 —— 這類增益不會被折進計畫裡。
+        """
+        self._buffs_cache.clear()
 
     def _invalidate_buffs_cache(self):
         self._cache_version += 1
@@ -3660,6 +3768,12 @@ class BuffManager:
             if idx < len(self.squad_names) - 1:
                 adj.append(self.squad_names[idx + 1])
             return [caster] + adj[:n]
+        # 「自己右側位置的友軍 N 名」—— 隊伍輸入順序 = 畫面由左到右的位置，所以是索引 +1…+N。
+        # 不含施放者；站最右邊時是空清單（不觸發）。貝洛塔：南瓜女巫（上游 a39e7d9）
+        if target.startswith("allies_right:"):
+            n = int(target.split(":")[1])
+            idx = self.squad_names.index(caster)
+            return self.squad_names[idx + 1:idx + 1 + n]
         # "최종 공격력이 가장 높은 [무기] 소지 아군 N기" — 무기 필터 ∩ 공격력 top N.
         # 시전자 포함(원문에 자신 제외 표기 없음). 매칭 아군이 N보다 적으면 있는 만큼.
         # 공격력 정렬이라 _LAZY_RESOLVE_PREFIXES 등록 필수. 레오나 `용기있는 시선 2`

@@ -586,6 +586,14 @@ DEFAULT_ENEMY: dict = {
 _WEAPON_TYPES: frozenset[str] = frozenset(
     v["weapon_type"] for v in _NIKKE.values() if isinstance(v, dict) and v.get("weapon_type"))
 
+# 有適正距離的武器種。正本與 `customization.OPTIMAL_RANGE_WEAPONS` 同一張表
+# （`weapon_mechanics.json` 的 `weapon_type_defaults[*].optimal_range`，火箭筒是 false）。
+# 武器種清單（`optimal_range_weapons`·`move.weapons`）只收這個集合 —— 收了 RL，
+# 遊戲裡不存在的 ③ +30% 就會靜靜加到 RL 普攻上（上游 f6bcbe9，2026-09-28）。
+_RANGE_WEAPON_TYPES: frozenset[str] = frozenset(
+    w for w in _WEAPON_TYPES
+    if (_MECHANICS.get("weapon_type_defaults", {}).get(w) or {}).get("optimal_range", True))
+
 
 def _pick(key: str, *sources: dict | None, default=None):
     """발사 메카닉 값의 3계층 해석. 앞 소스가 이긴다.
@@ -3901,10 +3909,17 @@ def simulate(
     # 부위 파괴 주기(`part_break_interval`)는 창이 있으면 안 걸리므로 편 뒤에도 알 수 있게
     # 먼저 본다.
     _has_part_windows = any(w.get("kind") == "parts" for w in (enm.get("boss_phases") or []))
+    # 沒有適正距離的武器種（RL）或不認得的名字，直接失敗而不是靜靜算錯。
+    # 瀏覽器那條路在 bridge 就先濾掉了（舊分享碼可能帶 RL），這裡擋的是直接呼叫引擎的人。
+    _bad_range = [w for w in (enm.get("optimal_range_weapons") or []) if w not in _RANGE_WEAPON_TYPES]
+    if _bad_range:
+        raise ValueError(
+            f"enemy.optimal_range_weapons에 적정거리가 없는 무기군이 있다: {_bad_range} — "
+            f"{' · '.join(sorted(_RANGE_WEAPON_TYPES))}만 받는다 (RL은 적정거리가 없다)")
     if enm.get("boss_phases"):
         enm = phases_to_patterns(enm)
     # 보스 패턴은 무거운 초기화보다 먼저 검사한다 — 잘못 적은 스크립트는 즉시 실패시킨다.
-    boss_patterns = (validate_boss_patterns(enm["patterns"], weapon_types=_WEAPON_TYPES)
+    boss_patterns = (validate_boss_patterns(enm["patterns"], weapon_types=_RANGE_WEAPON_TYPES)
                      if enm.get("patterns") else None)
     duration = cfg["duration"]
 
