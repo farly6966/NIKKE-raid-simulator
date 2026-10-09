@@ -379,7 +379,7 @@ export function decodeBattleCode(code: string): BattleShare {
     corePx: Math.trunc(num(raw.cp, 0, 1_000, d.corePx)),
     hasParts: Boolean(raw.hp),
     ...(Array.isArray(raw.bp) ? { bossPhases: raw.bp.slice(0, 64).flatMap(w => {
-      if (!Array.isArray(w) || !['parts', 'immune', 'element_gate', 'core', 'optimal_range', 'pierce_gate'].includes(w[0])) return [];
+      if (!Array.isArray(w) || !['parts', 'immune', 'element_gate', 'core', 'optimal_range', 'pierce_gate', 'vanish'].includes(w[0])) return [];
       const from = fromTenth(num(w[1], 0, 1800, -1));
       const to = fromTenth(num(w[2], 0, 1800, -1));
       return from >= 0 && to > from ? [{ kind: w[0] as NonNullable<BattleSettings['bossPhases']>[number]['kind'], from, to,

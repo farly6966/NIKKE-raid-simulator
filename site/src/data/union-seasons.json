@@ -1,6 +1,6 @@
 {
-  "source": "https://dildoro.com/app.js?v=823cbf7c",
-  "verified": "2026-09-12",
+  "source": "https://dildoro.com/app.js?v=0184c24e",
+  "verified": "2026-10-09",
   "seasons": [
     {
       "id": "s35",
@@ -311,6 +311,37 @@
           "애니힐리오 [D.M.T.R.]"
         ]
       ]
+    },
+    {
+      "id": "s45",
+      "start": "2026-10-09",
+      "bosses": [
+        [
+          "작열",
+          "bca002",
+          "두리안 [H.S.T.A.]"
+        ],
+        [
+          "전격",
+          "mca003",
+          "핑거즈 [Z.E.U.S.]"
+        ],
+        [
+          "수냉",
+          "xbg001_psid",
+          "크리스탈 체임버 [P.S.I.D.]"
+        ],
+        [
+          "풍압",
+          "mcg004_re",
+          "리빌드 벌컨R [A.N.M.I.]"
+        ],
+        [
+          "철갑",
+          "bbg004_dmtr",
+          "크라켄 [D.M.T.R.]"
+        ]
+      ]
     }
   ],
   "translations": {
@@ -353,7 +384,10 @@
       "두리안 [D.M.T.R.]": "Mace D.M.T.R.",
       "리빌드 벌컨R [Z.E.U.S.]": "Rebuild Vulcan R Z.E.U.S.",
       "토커티브 [H.S.T.A.]": "Chatterbox H.S.T.A.",
-      "크라켄 [D.M.T.R.]": "Kraken D.M.T.R."
+      "크라켄 [D.M.T.R.]": "Kraken D.M.T.R.",
+      "핑거즈 [Z.E.U.S.]": "Fingers Z.E.U.S.",
+      "크리스탈 체임버 [P.S.I.D.]": "Crystal Chamber P.S.I.D.",
+      "리빌드 벌컨R [A.N.M.I.]": "Rebuild Vulcan R A.N.M.I."
     },
     "zh": {
       "블랙스미스 [H.S.T.A.]": "鐵匠 [H.S.T.A.]",
@@ -394,7 +428,10 @@
       "두리안 [D.M.T.R.]": "榴槤 [D.M.T.R.]",
       "리빌드 벌컨R [Z.E.U.S.]": "重裝火神R[Z.E.U.S.]",
       "토커티브 [H.S.T.A.]": "Chatterbox H.S.T.A.",
-      "크라켄 [D.M.T.R.]": "克拉肯 [D.M.T.R.]"
+      "크라켄 [D.M.T.R.]": "克拉肯 [D.M.T.R.]",
+      "핑거즈 [Z.E.U.S.]": "手指 [Z.E.U.S.]",
+      "크리스탈 체임버 [P.S.I.D.]": "水晶洞穴 [P.S.I.D.]",
+      "리빌드 벌컨R [A.N.M.I.]": "重裝火神R [A.N.M.I.]"
     },
     "ja": {
       "블랙스미스 [H.S.T.A.]": "ブラックスミス「H.S.T.A.」",
@@ -435,7 +472,10 @@
       "두리안 [D.M.T.R.]": "ドリアン「D.M.T.R.」",
       "리빌드 벌컨R [Z.E.U.S.]": "リビルドバルカンR「Z.E.U.S.」",
       "토커티브 [H.S.T.A.]": "Chatterbox H.S.T.A.",
-      "크라켄 [D.M.T.R.]": "クラーケン「D.M.T.R.」"
+      "크라켄 [D.M.T.R.]": "クラーケン「D.M.T.R.」",
+      "핑거즈 [Z.E.U.S.]": "フィンガーズ「Z.E.U.S.」",
+      "크리스탈 체임버 [P.S.I.D.]": "クリスタルチャンバー「P.S.I.D.」",
+      "리빌드 벌컨R [A.N.M.I.]": "リビルドバルカンR「A.N.M.I.」"
     }
   }
 }

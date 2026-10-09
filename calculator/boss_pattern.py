@@ -392,7 +392,8 @@ def validate(patterns, *, weapon_types: frozenset[str] | None = None) -> list[Pa
             if weapon_types is not None:
                 bad = [w for w in ws if w not in weapon_types]
                 if bad:
-                    raise ValueError(f"{where}: 모르는 무기군 {bad} — {' · '.join(sorted(weapon_types))}")
+                    raise ValueError(f"{where}: 적정거리가 없거나 모르는 무기군 {bad} — "
+                                     f"{' · '.join(sorted(weapon_types))}만 받는다")
             kw["weapons"] = tuple(ws)
         elif kind in RESERVED_KINDS:
             if "spec" in raw and not isinstance(raw["spec"], dict):
@@ -737,7 +738,8 @@ class BossScript:
                 self._close(run, t, "end", [])
 
 
-PHASE_KINDS = ("core", "parts", "immune", "element_gate", "pierce_gate", "optimal_range")
+PHASE_KINDS = ("core", "parts", "immune", "element_gate", "pierce_gate", "optimal_range",
+               "vanish")
 
 
 def _phase_windows(phases: list, kind: str) -> list[dict]:
@@ -762,7 +764,7 @@ def _span(win: dict, extra: dict | None = None) -> dict:
 def phases_to_patterns(enemy: dict) -> dict:
     """fork 고유 `enemy["boss_phases"]`를 **같은 뜻의** 패턴 목록으로 옮긴 적을 돌려준다.
 
-    `boss_phases`는 평평한 시간 창 여섯 종이고, 패턴은 서로를 잇는 스크립트다. 여섯 종이
+    `boss_phases`는 평평한 시간 창(원래 여섯 종, 2026-10-09부터 vanish 포함 일곱 종)이고, 패턴은 서로를 잇는 스크립트다. 여섯 종이
     전부 「전투 시작에서 `from`초 뒤에 열려 `to`초에 닫히는」 구간이므로 `after: [start]`
     + `delay` + `until.time` 하나로 옮겨진다.
 
@@ -778,6 +780,9 @@ def phases_to_patterns(enemy: dict) -> dict:
                    경계로 구간을 잘라 **겹치지 않는** `move`들로 펴서 그 차이를 없앤다.
     immune         딜 전부 차단. 같은 이름의 패턴 종류로 1:1.
     pierce_gate    관통 딜만 통과. 같은 이름의 패턴 종류로 1:1.
+    vanish         頭目消失：只有普攻落空（普攻的爆裂量表也不累積），技能傷害照常。
+                   與同名 pattern 1:1 —— 2026-10-09 為聯盟 S45 推薦設定新增，
+                   既有六種的結果不受影響（沒有 vanish 區間就不會產生這個 pattern）。
     element_gate   적 코드에 우월한 캐스터만 통과. → `shield`(code = 적 코드).
 
     `boss_phases`가 없으면 `patterns` 없이 그대로 돌려준다.
@@ -809,8 +814,8 @@ def phases_to_patterns(enemy: dict) -> dict:
             "targets": [{"name": f"부위{i}", "hp": 0}],   # hp 0 = 안 깨지는 표적
             "emit_end": ["event:part_destroy"]}))
 
-    # ── immune · pierce_gate ─────────────────────────────────────────────
-    for kind, label in (("immune", "무적"), ("pierce_gate", "관통관문")):
+    # ── immune · pierce_gate · vanish ────────────────────────────────────
+    for kind, label in (("immune", "무적"), ("pierce_gate", "관통관문"), ("vanish", "사라짐")):
         for i, w in enumerate(_phase_windows(phases, kind), 1):
             pats.append(_span(w, {"id": f"{label}{i}", "kind": kind}))
 

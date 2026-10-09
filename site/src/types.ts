@@ -183,7 +183,7 @@ export interface ShotTrack {
 export interface PhaseWindow { from: number; to: number }
 /** 구간 끝마다 부위 하나가 파괴된다. 같은 구간 여러 개는 여러 부위다. */
 export interface BossPhase extends PhaseWindow {
-  kind: 'parts' | 'immune' | 'element_gate' | 'core' | 'optimal_range' | 'pierce_gate';
+  kind: 'parts' | 'immune' | 'element_gate' | 'core' | 'optimal_range' | 'pierce_gate' | 'vanish';
   weapons?: string[];
 }
 /** 속저 — 그 구간 동안 이 코드에 **우월한** 캐릭터의 딜만 들어간다. */

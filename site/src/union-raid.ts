@@ -33,7 +33,7 @@ import { UnionSquadPicker } from './union-squad';
 import { cleanUnionCubes, applyUnionCubes, createUnionCubeEditor, type UnionCubes } from './union-cubes';
 import { createTimelineBlock } from './timeline';
 import { t } from './i18n';
-import { UNION_BOSS_SEASONS, unionBossPreset, unionBossArt, bossWeakness, defaultUnionDecks, recommendedUnionBattle,
+import { UNION_BOSS_SEASONS, unionBossPreset, unionBossArt, bossWeakness, defaultUnionDecks, recommendedUnionBattle, unionRecommendationInfo,
   unionSeasonForBosses, type UnionBossPreset } from './union-bosses';
 import type { BattleSettings, DeckState, ElementCode, SimulationResult } from './types';
 
@@ -1686,11 +1686,13 @@ export function mountUnionRaid(hosts: UnionHosts, deps: UnionDeps): UnionHandle 
       lineup.append(tile);
     });
     seasonBox.append(lineup);
-    if (season?.id === 's44') seasonBox.append(el('p', 'field-note',
-      t('추천값은 DILDORO S44 설정(2026-09-09)입니다. 단계와 실제 부위 파괴 시간에 맞게 수정하세요.')));
-    if (bosses.some(boss => { const preset = unionBossPreset(boss.bossId); return preset && preset.seasonId !== 's44'; })) {
+    const recommended = unionRecommendationInfo(season?.id);
+    if (recommended) seasonBox.append(el('p', 'field-note',
+      t('추천값은 DILDORO {season} 설정({date})입니다. 단계와 실제 부위 파괴 시간에 맞게 수정하세요.',
+        { season: recommended.season, date: recommended.verified })));
+    if (bosses.some(boss => { const preset = unionBossPreset(boss.bossId); return preset && !unionRecommendationInfo(preset.seasonId); })) {
       seasonBox.append(el('p', 'field-note union-season-warning',
-        t('과거 회차는 보스 명단·속성만 검증되었습니다. 전투 조건은 기본값이며 방어력·코어·부위·구간을 확인해야 합니다. S44 추천값은 적용하지 않습니다.')));
+        t('과거 회차는 보스 명단·속성만 검증되었습니다. 전투 조건은 기본값이며 방어력·코어·부위·구간을 확인해야 합니다. 다른 회차의 추천값은 적용하지 않습니다.')));
     }
     retiredBosses.forEach((retired, index) => {
       if (!retired.name && !retired.code && !retired.decks.some(deck => deck.code)) return;
@@ -2103,7 +2105,7 @@ export function mountUnionRaid(hosts: UnionHosts, deps: UnionDeps): UnionHandle 
       if (boss.battle) {
         const advanced = el('details', 'union-boss-settings');
         advanced.append(el('summary', undefined, t('추천 설정 상세 · 수정')));
-        const reset = el('button', 'roster-import', t(preset?.seasonId === 's44' ? '추천값 복원' : '기본 조건 복원'));
+        const reset = el('button', 'roster-import', t(unionRecommendationInfo(preset?.seasonId) ? '추천값 복원' : '기본 조건 복원'));
         reset.type = 'button'; reset.disabled = !preset;
         reset.addEventListener('click', () => {
           if (!preset) return;
@@ -2172,8 +2174,8 @@ export function mountUnionRaid(hosts: UnionHosts, deps: UnionDeps): UnionHandle 
         advanced.append(el('p', 'field-note',
           t('부위는 시작부터 종료 직전까지 존재하며, 종료 시 부위 하나가 파괴됩니다. 같은 구간을 여러 번 넣으면 여러 부위입니다. 무적은 모든 피해를 막고 속성 저지는 우월 코드만 통과시킵니다.')));
         const phases = boss.battle.bossPhases ?? [];
-        const kinds = { parts: '부위', immune: '모든 피해 차단', element_gate: '속성 저지', core: '核心出現', optimal_range: '適正距離', pierce_gate: '僅貫通傷害' };
-        advanced.append(el('p', 'field-note', '有核心區間時，僅在區間內開啟上方設定的核心。適正距離區間補充全程武器設定；重疊時較早開始者優先。貫通限定區間只讓貫通傷害通過。'));
+        const kinds = { parts: '부위', immune: '모든 피해 차단', element_gate: '속성 저지', core: '核心出現', optimal_range: '適正距離', pierce_gate: '僅貫通傷害', vanish: '頭目消失（普攻落空）' };
+        advanced.append(el('p', 'field-note', '有核心區間時，僅在區間內開啟上方設定的核心。適正距離區間補充全程武器設定；重疊時較早開始者優先。貫通限定區間只讓貫通傷害通過。頭目消失區間內普攻不會命中（普攻的爆裂量表也不累積），技能傷害照常。'));
         phases.forEach((phase, at) => {
           const line = el('div', 'union-phase-row');
           const phaseError = el('p', 'union-error');

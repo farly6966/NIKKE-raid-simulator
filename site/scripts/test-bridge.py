@@ -913,6 +913,18 @@ class UnionBossPhasesBridgeTest(unittest.TestCase):
                     {"kind": "optimal_range", "from": 0, "to": 5, "weapons": weapons},
                 ]}))
 
+    def test_vanish_phase_and_rocket_launcher_range_weapons(self):
+        # 頭目消失：普攻落空、技能照常 —— 全程消失時總傷下降但不會歸零。
+        base = json.loads(run_request(json.dumps(self.BASE)))
+        vanish = json.loads(run_request(json.dumps({
+            **self.BASE, "bossPhases": [{"kind": "vanish", "from": 0, "to": 180}],
+        })))
+        self.assertLess(vanish["squadTotal"], base["squadTotal"])
+        # 舊分享碼可能在適正距離區間帶著 RL —— 靜靜拿掉，不讓引擎因此失敗或替 RL 加成。
+        with_rl = json.loads(run_request(json.dumps({**self.BASE, "bossPhases": [
+            {"kind": "optimal_range", "from": 0, "to": 180, "weapons": ["RL"]}]})))
+        self.assertEqual(with_rl["squadTotal"], base["squadTotal"])
+
 
 if __name__ == "__main__":
     unittest.main()

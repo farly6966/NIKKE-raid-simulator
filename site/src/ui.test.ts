@@ -582,11 +582,11 @@ describe('calculator UI', () => {
     const stored = () => JSON.parse(localStorage.getItem('nikke-union-board-v2')!);
     expect(root.querySelectorAll('.union-boss')).toHaveLength(5);
     expect(root.querySelector('[data-union-season-apply]')).toBeNull();
-    expect(root.querySelector<HTMLSelectElement>('[data-union-season]')!.value).toBe('s44');
-    expect(root.querySelectorAll('[data-union-season] option')).toHaveLength(10);
+    expect(root.querySelector<HTMLSelectElement>('[data-union-season]')!.value).toBe('s45');
+    expect(root.querySelectorAll('[data-union-season] option')).toHaveLength(11);
     expect(stored().map((b: { bossId: string }) => b.bossId)).toEqual(UNION_BOSS_SEASONS[0]!.bosses.map(b => b.id));
     selectUnionSeason('s43');
-    expect(stored().map((b: { bossId: string }) => b.bossId)).toEqual(UNION_BOSS_SEASONS[1]!.bosses.map(b => b.id));
+    expect(stored().map((b: { bossId: string }) => b.bossId)).toEqual(UNION_BOSS_SEASONS.find(s => s.id === 's43')!.bosses.map(b => b.id));
     expect(root.querySelector('.union-season-warning')).not.toBeNull();
     const core = root.querySelector<HTMLInputElement>('.union-boss-code input[type="number"]')!;
     core.value = '61'; core.dispatchEvent(new Event('change'));
