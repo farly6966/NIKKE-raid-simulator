@@ -165,9 +165,14 @@ describe('union default decks', () => {
   it('serves every season that ships defaults, and an empty list for the rest', () => {
     const bosses = UNION_BOSS_SEASONS.find(s => s.id === 's44')!.bosses;
     for (const boss of bosses) expect(defaultUnionDecks(boss).length, boss.id).toBeGreaterThan(0);
-    // S45 的預設編成要等使用者提供自己的實際盤（出處規則見 docs/union-boss-catalog.md）。
-    // 在那之前新盤是空的，但不能壞。
-    for (const boss of UNION_BOSS_SEASONS[0]!.bosses) expect(defaultUnionDecks(boss)).toEqual([]);
+    // S45 照使用者指示沿用上一期：同屬性的王用同一批隊伍，內容與順序都不變。
+    const s45 = UNION_BOSS_SEASONS.find(s => s.id === 's45')!.bosses;
+    expect(UNION_BOSS_SEASONS[0]!.id).toBe('s45');
+    for (const boss of s45) {
+      const previous = bosses.find(b => b.enemyCode === boss.enemyCode)!;
+      expect(defaultUnionDecks(boss), boss.id).toEqual(defaultUnionDecks(previous));
+      expect(defaultUnionDecks(boss).length, boss.id).toBeGreaterThan(0);
+    }
     // 없는 회차는 빈 배열이다 — 기본 편성이 없다고 판이 깨지면 안 된다.
     expect(defaultUnionDecks({ ...bosses[0]!, id: 's43-none', seasonId: 's43' })).toEqual([]);
   });
