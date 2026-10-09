@@ -2376,14 +2376,43 @@ class BuffManager:
                 # 회수는 양쪽 같다. 경계 처리는 tick()의 `limit` 참조.
                 duration = eff.get("duration")
                 expires = math.inf if duration is None or duration == -1 else t + duration
-                first_t = t if eff.get("tick_start") == "immediate" else t + tick_interval
+                max_stack = eff.get("max_stack", 1)
+                # **不疊層的持續傷害，名字就是實例**（上游 197e91a，使用者 2026-10-09 確認照上游）。
+                # 實例鍵原本是效果物件，所以用兩條路徑掛同一個狀態的效果（胡桃 `해킹` —— 命中 36 次·爆裂）
+                # 會在同一個敵人身上各跑各的，tick 進兩次。同一個施放者的同名 DoT 已經在跑時，
+                # 改為刷新那個實例，這次的對象併進去。`[N 중첩]` 的 DoT 與週期自動攻擊不適用。
+                if eff.get("stat") == "dot_damage" and max_stack == 1 and eff.get("name"):
+                    running = next((
+                        ab for ab in self._active
+                        if ab.caster == caster and ab.effect is not eff
+                        and ab.effect.get("name") == eff["name"]
+                        and ab.effect.get("stat") == "dot_damage"
+                        and ab.effect.get("max_stack", 1) == 1
+                        and id(ab.effect) in self._dot_timers
+                    ), None)
+                    if running is not None:
+                        own_raw = eff.get("target", "self")
+                        if (running.target_chars is not None and isinstance(own_raw, str)
+                                and not own_raw.startswith(_LAZY_RESOLVE_PREFIXES)):
+                            for tgt in self._resolve_target(own_raw, caster):
+                                if tgt not in running.target_chars:
+                                    running.target_chars.append(tgt)
+                        eff = running.effect
+                # **正在跑的持續傷害重新施加時，tick 節拍照舊、只刷新到期時間**（上游 129ace4）。
+                # 原本每次重新施加都把下一跳重排成「重新施加 +interval」，比節拍更密集地重掛的 DoT
+                # （吉兒 `산성탄 2`·胡桃 `해킹`·渡鴉 `쇼크웨이브`）tick 間隔被拉開而掉跳。
+                # 第一次施加（含到期後再掛）的首跳相位照舊是 type 1/2；週期自動攻擊不是持續傷害，也照舊。
+                running_timer = self._dot_timers.get(id(eff))
+                if eff.get("stat") == "dot_damage" and running_timer is not None:
+                    first_t = running_timer[1]
+                else:
+                    first_t = t if eff.get("tick_start") == "immediate" else t + tick_interval
                 self._dot_timers[id(eff)] = (caster, first_t, expires)
                 # DoT는 _active에도 등록해야 target_state/debuff_cleanse/remove_named_buff
                 # 등이 name·polarity 기준으로 조회할 수 있다.
                 raw_target = eff.get("target", "self")
                 lazy = isinstance(raw_target, str) and raw_target.startswith(_LAZY_RESOLVE_PREFIXES)
                 targets = None if lazy else self._resolve_target(raw_target, caster)
-                max_stack = eff.get("max_stack", 1)
                 existing = next(
                     (ab for ab in self._active if ab.effect is eff and ab.caster == caster), None
                 )
