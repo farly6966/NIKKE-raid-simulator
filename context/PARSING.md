@@ -139,6 +139,7 @@ print(json.dumps(data['캐릭터명'], ensure_ascii=False, indent=2))
 | `scaling_hp_pct` | 선택 | damage, instant | `scaling: "max_hp_additive"` 사용 시 합산할 최대 체력 비율(%) |
 | `target_effect` | 선택 | buff, instant | 효과가 작용할 대상 효과의 `name`. `effect_interval`·`remove_named_buff` stat에서 필수 |
 | `trigger_values` | 선택 | 전체 | timing의 N이 레벨마다 다를 때 사용. `timing`에 `"hit_count:{0}"` 형태로 플레이스홀더 기입, `trigger_values: {"1": 65, "2": 62, ...}`로 레벨별 값 기입. `note` 필드로 상황 설명 추가 |
+| `remove_scope` | 선택 | instant | `remove_named_buff` 專用。`"target"` 時**只從 `target` 解析出的角色身上**移除該名稱的增益（掛在多人身上的實例只移出那個角色）。省略則照舊，不分對象與施放者全部移除。不同角色**各自持有同名狀態**、但只有一邊該變時使用（兔女郎的 `바니 모드`） |
 | `event_scope` | 선택 | buff | `"recipients"`만 유효. 이 효과가 발생시키는 `event:{name}`을 **실제 수령자에게만** 통지한다(기본은 스쿼드 전체 브로드캐스트). 서로 다른 캐릭터가 같은 이름의 상태를 각자 보유해 남의 상태 변화로 트리거가 잘못 열릴 때 쓴다 (퀸(마코토)·유키코 `1more`·`추격`) |
 | `target_skill` | ✅* | instant | `force_skill_use` 전용 필수 필드. 강제로 발동시킬 **슬롯**(`"스킬1"`/`"스킬2"`/`"스킬3"`). 효과 하나가 아니라 슬롯 전체가 대상이라 `target_effect`를 쓰지 않는다 |
 | `duration_values` | 선택 | buff | `values`/`fixed_value` 없이 duration만 레벨별로 다를 때 사용. `duration` 대신 `duration_values: {"1": 2.57, ..., "10": 5.0}` 기입 |
@@ -447,6 +448,7 @@ n% ▲]`처럼 대괄호 안에 상태 이름을 적어 두더라도, 그 이름
 | `자신을 제외한 아군 전체에게` | `"all_allies_excl_self"` |
 | `아군 N기에게` | `"allies:N"` |
 | `자신과 양 옆에 있는 아군 N기에게` | `"allies_adjacent:N"` |
+| `자신의 우측 자리 아군 N기에게` | `"allies_right:N"` — 以隊伍輸入順序（畫面由左到右）為準，索引 +1 … +N。不含施放者，站最右邊時不觸發（貝洛塔：南瓜女巫） |
 | `최종 공격력이 가장 높은 아군 N기에게` | `"allies_top_atk:N"` |
 | `자신을 제외한 최종 공격력이 가장 높은 아군 N기에게` | `"allies_top_atk_excl:N"` |
 | `자신을 제외한 전투불능 상태 최종 공격력이 가장 높은 아군 N기에게` | `"allies_down_top_atk_excl:N"` — 전투불능 필터가 붙은 형태. 보스 sim에서는 영구 무발동 |

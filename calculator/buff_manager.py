@@ -1252,6 +1252,40 @@ class BuffManager:
             ]
             return
 
+        # `remove_scope: "target"` —— 只從 `target` 解析出來的角色身上拿掉（上游 9b16333）。
+        # 掛在多人身上的實例只移除那個角色，沒有剩餘對象時實例才消失（與 `debuff_cleanse` 同形）。
+        # 同名狀態由各角色各自持有、但只有一邊該變的時候用 —— 用下面的全域移除會把搭檔的
+        # 模式也清掉，同步就斷了（吉爾提：神力兔女郎 · 森：疾速兔女郎的 `바니 모드`）。
+        if stat == "remove_named_buff" and eff.get("remove_scope") == "target":
+            target_name = eff.get("target_effect", "")
+            scope = set(self._resolve_target(eff.get("target", "self"), caster) or [])
+            hit = [ab for ab in self._by_name(target_name)
+                   if scope & set(ab.target_chars or [])]
+            if not hit:
+                return
+            ended = []
+            for ab in hit:
+                gone = [c for c in ab.target_chars if c in scope]
+                if self._buff_event_handler:
+                    for tgt in gone:
+                        self._buff_event_handler("expire", target_name, ab.caster, tgt, t, t)
+                ab.target_chars = [c for c in ab.target_chars if c not in scope]
+                if not ab.target_chars:
+                    ended.append(ab)
+            if ended:
+                ended_uids = {ab.uid for ab in ended}
+                self._active = [ab for ab in self._active if ab.uid not in ended_uids]
+                live = {id(ab.effect) for ab in self._active}
+                for ab in ended:
+                    if id(ab.effect) not in live:
+                        self._dot_timers.pop(id(ab.effect), None)
+                        self._instant_timers.pop(id(ab.effect), None)
+            self._invalidate_buffs_cache()   # 只有 `target_chars` 變少的實例，彙總也會變
+            # 與全域移除相同，走訪結束後才 emit —— 重入會改動 `_active`。
+            for ab in ended:
+                self.notify(f"event:state_end:{target_name}", t, ab.caster)
+            return
+
         # remove_named_buff: 특정 name의 버프 즉시 제거 (_active + _dot_timers 모두)
         if stat == "remove_named_buff":
             target_name = eff.get("target_effect", "")
@@ -2032,7 +2066,12 @@ class BuffManager:
         """
         if eff.get("event_scope") != "recipients":
             return list(self.squad_names)
-        return [c for c in (targets or [caster]) if c in self.squad_names]
+        # 對象**已確定但是 0 人**時，沒有人收到 —— 不落到施放者身上，否則沒收到的狀態的
+        # 「套用時」觸發會在施放者身上多跑一次（兔女郎同步 —— `allies_with_buff:` 對象 0 人）。
+        # `None` 是延後解析、還不知道，照舊算施放者。（上游 9b16333）
+        if targets is None:
+            return [caster] if caster in self.squad_names else []
+        return [c for c in targets if c in self.squad_names]
 
     def charge_hold_thresholds(self, caster: str) -> list[tuple[float, str]]:
         """이 캐스터의 효과가 쓰는 `charge_hold:N` 임계값 목록 — `(값, 원문 표기)`.
@@ -3700,6 +3739,12 @@ class BuffManager:
             if idx < len(self.squad_names) - 1:
                 adj.append(self.squad_names[idx + 1])
             return [caster] + adj[:n]
+        # 「自己右側位置的友軍 N 名」—— 隊伍輸入順序 = 畫面由左到右的位置，所以是索引 +1…+N。
+        # 不含施放者；站最右邊時是空清單（不觸發）。貝洛塔：南瓜女巫（上游 a39e7d9）
+        if target.startswith("allies_right:"):
+            n = int(target.split(":")[1])
+            idx = self.squad_names.index(caster)
+            return self.squad_names[idx + 1:idx + 1 + n]
         # "최종 공격력이 가장 높은 [무기] 소지 아군 N기" — 무기 필터 ∩ 공격력 top N.
         # 시전자 포함(원문에 자신 제외 표기 없음). 매칭 아군이 N보다 적으면 있는 만큼.
         # 공격력 정렬이라 _LAZY_RESOLVE_PREFIXES 등록 필수. 레오나 `용기있는 시선 2`

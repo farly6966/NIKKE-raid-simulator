@@ -21,7 +21,7 @@ describe('generated browser runtime', () => {
       readFileSync(join(publicDir, 'catalog.json'), 'utf8'),
     ) as CharacterMeta[];
 
-    expect(catalog).toHaveLength(200);
+    expect(catalog).toHaveLength(203);
     expect(catalog.every((char) => !char.name.startsWith('test_'))).toBe(true);
     expect(catalog.find((char) => char.name === '라피 : 레드 후드')?.altBurstStage).toBe('1');
     expect(catalog.find((char) => char.name === '리타')?.altBurstStage).toBeNull();

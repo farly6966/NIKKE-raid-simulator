@@ -401,7 +401,7 @@ python calculator/damage.py
 | `buff_stack_init` | `_dispatch_instant()` | ✅ | `target_effect` 버프가 없을 때만 N 스택으로 초기 생성. `_effects`에서 버프 정의 조회 후 `ActiveBuff` 직접 생성 |
 | `debuff_stack_add` | `_dispatch_instant()` | ✅ | |
 | `debuff_stack_remove` | `_dispatch_instant()` | ✅ | |
-| `remove_named_buff` | `_dispatch_instant()` | ✅ | `target_effect` 필수 |
+| `remove_named_buff` | `_dispatch_instant()` | ✅ | `target_effect` 필수. 기본은 이름이 같은 버프를 대상·시전자와 무관하게 전부 지운다. **`remove_scope: "target"`이면 `target`으로 풀린 캐릭터에게서만** 지운다（2026-10-09 移植上游 `9b16333`）— 掛在多人身上的實例只把那個角色移出 `target_chars`，剩 0 人時實例才消失並發出 `event:state_end:` |
 | `debuff_cleanse` | `_dispatch_instant()` | ✅ | |
 | `enemy_buff_cleanse` | — | 🚫 | 적 버프 모델 없음 |
 | `force_reload` | timeline 핸들러 | ✅ | 시전자 `CharState.ammo = 0` 후 `_start_reload()` 강제 호출. 이미 재장전 중이면 스킵 |
@@ -596,6 +596,7 @@ lazy resolve: 버프 반영 스탯 기준 정렬 필요 target → `_activate()`
 | `"[캐릭터명]"` (하드코딩) | ❌ | ✅ | target 값이 스쿼드 캐릭터 이름 리터럴이면 그 캐릭터 지정 (`target in squad_names`). 이사벨(아르카나 예외)·민트(프리카). **특정 캐릭 전용 — 코드 일반화는 범위 밖(memo)** |
 | `"allies:N"` | ❌ | ✅ | 스쿼드 입력 순서 앞 N명 |
 | `"allies_adjacent:N"` | ❌ | ✅ | 양 옆 아군. 자신 포함 최대 N+1명 |
+| `"allies_right:N"` | ❌ | ✅ | **自己右側位置的友軍 N 名**（2026-10-09 移植上游 `a39e7d9`）。隊伍輸入順序 = 畫面由左到右，索引 +1 … +N。不含施放者，站最右邊時為空清單 → 不觸發。位置是固定屬性，不需要 lazy resolve。貝洛塔：南瓜女巫（`allies_right:1`） |
 | `"allies_top_atk:N"` | ✅ | ✅ | `_LAZY_RESOLVE_PREFIXES` 등록됨 |
 | `"allies_top_atk_excl:N"` | ✅ | ✅ | `_LAZY_RESOLVE_PREFIXES` 등록됨. 자신 제외 |
 | `"allies_lowest_hp:N"` | ✅ | ✅ | `_LAZY_RESOLVE_PREFIXES` 등록됨 |
