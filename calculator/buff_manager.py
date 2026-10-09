@@ -1210,6 +1210,7 @@ class BuffManager:
                 else:
                     # 중첩 가능 해로운 효과 범용 감소: 완전 제거 불가, 최소 1스택 유지
                     ab.stack = max(1, min(ab.stack + delta, cap))
+                self._drop_value_cache()
                 # 스택 변화를 buff_event_handler에 알려 UI 타임라인 갱신
                 if self._buff_event_handler and ab.effect.get("name"):
                     new_val = self._get_value(ab.effect, ab)
@@ -1273,6 +1274,7 @@ class BuffManager:
                 if caster not in (ab.target_chars or []):
                     continue
                 ab.stack = max(0, ab.stack - reduce)
+                self._drop_value_cache()
                 if ab.stack <= 0:
                     to_remove.append(ab.uid)
             if to_remove:
@@ -1306,6 +1308,9 @@ class BuffManager:
                 )
                 cap = base_cap + add_cap
                 gauges[gauge_id] = min(new_val, cap)
+                # `gauge_above:`·`gauge_below:` 是每次查詢都會讀的條件 —— 量表一動，這一幀先算的值就舊了。
+                if gauges[gauge_id] != current:
+                    self._drop_value_cache()
             else:  # gauge_consume / gauge_consume_as_ammo
                 if val == -1.0:  # fixed_value: -1 = 전체 소모
                     consumed = current
@@ -1313,6 +1318,8 @@ class BuffManager:
                 else:
                     consumed = min(val, current)
                     gauges[gauge_id] = max(0.0, current - val)
+                if gauges[gauge_id] != current:
+                    self._drop_value_cache()
                 # gauge_consume_as_ammo: 실제 소모량만큼 squad_ammo_consume 이벤트 발생
                 if stat == "gauge_consume_as_ammo" and consumed > 0:
                     for _ in range(int(consumed)):
@@ -1345,6 +1352,7 @@ class BuffManager:
                     if not affected:
                         continue
                     ab.expires_at += val
+                    self._drop_value_cache()
                     # DoT는 틱 스케줄이 _dot_timers에 별도로 복사돼 있다. ActiveBuff만
                     # 늘리면 표시만 길어지고 실제 틱은 원래 시각에서 끊긴다.
                     # (사쿠라 : 블룸 인 서머 `피어나다 3` — 적측 `벚꽃잎` 유지 시간 ▲)
@@ -2334,6 +2342,7 @@ class BuffManager:
 
                 if existing:
                     # 재발동: 타이머 갱신은 위에서 됐으므로 스택/만료만 갱신
+                    self._drop_value_cache()
                     if max_stack == 1:
                         existing.expires_at = expires
                     elif scaling_ref and eff.get("scaling") == "stack_count":
@@ -2388,6 +2397,7 @@ class BuffManager:
                                    else last_t + duration)
                         ab.expires_at = expires
                         ab.stack = 0
+                        self._drop_value_cache()
                         # 주기 틱은 램프가 끝난 뒤 +interval부터 잇는다.
                         self._dot_timers[id(eff)] = (caster, last_t + tick_interval, expires)
             elif self._damage_handler:
@@ -2463,7 +2473,7 @@ class BuffManager:
 
         if existing:
             # 同一影格再次疊層或刷新時，先丟棄舊的傷害彙總；後續連鎖觸發必須看到新值。
-            self._buffs_cache.clear()
+            self._drop_value_cache()
             if max_stack == 1:
                 existing.activated_at = t
                 existing.expires_at = expires
@@ -2660,6 +2670,7 @@ class BuffManager:
                     if ab is None:
                         continue
                     ab.stack = stack
+                    self._drop_value_cache()
                     self._damage_handler(eff, caster, t)
 
         # ── 주기 대미지(tick_interval) — 만료 정리보다 **먼저** 처리한다 ──────
@@ -2856,6 +2867,18 @@ class BuffManager:
                 del self._instant_timers[eid]
 
     # ── 버프 집계 ─────────────────────────────────────────────────────────
+
+    def _drop_value_cache(self):
+        """`_active` 的組成沒變、但查詢結果會變的時候，丟掉同一幀已經算好的彙總。
+
+        `_invalidate_buffs_cache()` 只在增益掛上／拿掉時跑。已經掛著的增益重新觸發、
+        層數增減、延長持續時間，或 `gauge_above:` 這類條件讀的量表動了，結果一樣會變 ——
+        不丟的話，同一幀先問的人拿到的**更新前的值**，後問的人也會拿到，傷害就取決於誰先問。
+        fork 在 `c782e17` 只補了 `_activate` 重新觸發那一處；其餘各處對應上游 a01402e
+        （2026-09-28，上游的做法是在快取鍵多放一個號碼，這裡沿用 fork 既有的「直接清掉」）。
+        執行計畫快取照用 —— 這類增益不會被折進計畫裡。
+        """
+        self._buffs_cache.clear()
 
     def _invalidate_buffs_cache(self):
         self._cache_version += 1
